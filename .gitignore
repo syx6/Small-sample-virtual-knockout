@@ -1,0 +1,31 @@
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Raw and derived data are intentionally kept out of GitHub.
+data/**
+!data/priors/
+!data/priors/*.gmt
+
+# Keep only polished user-facing figures in the repository.
+results/**
+!results/user_facing_figures/
+!results/user_facing_figures/*.png
+
+# Large scientific data and generated model artifacts.
+*.h5ad
+*.h5mu
+*.mtx
+*.mtx.gz
+*.tar
+*.tar.gz
+*.zip
+*.pkl
+*.joblib
+*.npy
+*.npz
+
+# Generated tables are reproducible from scripts and should not bloat commits.
+*.csv
+*.tsv
