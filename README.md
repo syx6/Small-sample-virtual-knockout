@@ -31,6 +31,35 @@ STAT1,0.0,1.2,0.2,...
 
 `pathway/program score` 是软件内部自动生成的模型状态表示，不是用户必须提供的输入。
 
+## 直接导入 Seurat / 10x
+
+如果用户手里是 10x 文件夹、10x h5 或 h5Seurat，可以先导入成 workflow-ready h5ad：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli import-data `
+  --input path\to\filtered_feature_bc_matrix `
+  --format 10x_mtx `
+  --out-dir results\import_10x_demo
+```
+
+支持：
+
+```text
+--format h5ad
+--format 10x_mtx
+--format 10x_h5
+--format h5seurat
+```
+
+导入后固定输出：
+
+- `imported_data.h5ad`
+- `input_summary.csv`
+- `input_overview.png`
+- `import_report.md`
+
+`input_overview.png` 会直观显示导入了多少细胞、多少 RNA features、有没有 protein/peak/guide 等额外模态，以及 metadata 标签分布。
+
 ## 一键运行 h5ad 示例
 
 ```powershell
@@ -188,6 +217,7 @@ results/reference_apply_stat1_demo
 
 - `docs/software_interface.md`: 用户输入、运行方式和输出解释
 - `docs/reference_model_workflow_v2.md`: reference model v2、批量 KO、cell type 分层、prediction-only 10X/multiome 报告
+- `docs/ordered_enhancement_plan.md`: 按顺序增强 Seurat/10x、多模态 benchmark、ATAC peak、多基因 KO 和 batch covariate
 - `docs/single_double_knockout_results.md`: 单基因敲除和双基因敲除结果整理
 - `docs/current_scope_and_limitations.md`: 当前支持范围和限制说明
 - `docs/virtual_knockout_method_background.md`: 虚拟敲除背景、主流方法和当前方法选择

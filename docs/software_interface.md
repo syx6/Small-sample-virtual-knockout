@@ -29,6 +29,37 @@
 
 ## 2. 推荐用户输入格式
 
+### 格式 0：Seurat / 10x 先导入
+
+如果用户手里不是 h5ad，而是 10x 或 Seurat 文件，可以先运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli import-data `
+  --input path\to\filtered_feature_bc_matrix `
+  --format 10x_mtx `
+  --out-dir results\import_10x_demo
+```
+
+可选格式：
+
+```text
+h5ad
+10x_mtx
+10x_h5
+h5seurat
+```
+
+导入结果：
+
+```text
+imported_data.h5ad
+input_summary.csv
+input_overview.png
+import_report.md
+```
+
+其中 `input_overview.png` 是第一张必须给用户看的图：它告诉用户数据里有多少细胞、多少 RNA features、是否检测到 protein/peak/guide 模态，以及 metadata 标签分布。
+
 ### 格式 A：AnnData h5ad
 
 这是最推荐的格式。

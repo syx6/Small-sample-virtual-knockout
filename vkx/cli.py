@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from .core import run_virtual_ko
+from .importers import import_single_cell_data, write_import_outputs
 from .interaction import run_double_interaction
 from .preprocess import csv_matrix_to_state_table, h5ad_to_state_scores, h5ad_to_state_table, parse_extra_obsm_specs
 from .reference import apply_reference_model, inspect_reference_model, train_reference_model
@@ -59,6 +60,26 @@ def run_fit(args: argparse.Namespace) -> None:
     if not auc_summary.empty:
         print(f"  AUC: {auc_summary['roc_auc'].iloc[0]:.3f}")
     write_analysis_mode(out_dir, "evaluation", "KO labels were provided; true-vs-virtual metrics and AUC/R2-style summaries are valid for these held-out KO targets.")
+
+
+def run_import_data(args: argparse.Namespace) -> None:
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_h5ad = Path(args.output_h5ad) if args.output_h5ad else out_dir / "imported_data.h5ad"
+    adata = import_single_cell_data(
+        input_path=args.input,
+        input_format=args.format,
+        out_h5ad=out_h5ad,
+        ko_metadata_csv=args.metadata_csv,
+        cell_id_col=args.cell_id_col,
+    )
+    write_import_outputs(adata, out_dir, args.format)
+    print("Imported single-cell data:")
+    print(f"  h5ad: {out_h5ad}")
+    print(f"  overview figure: {out_dir}\\input_overview.png")
+    print(f"  report: {out_dir}\\import_report.md")
+    print(f"  cells: {adata.n_obs}")
+    print(f"  RNA features: {adata.n_vars}")
 
 
 def run_from_raw(args: argparse.Namespace) -> None:
@@ -242,6 +263,14 @@ def build_parser() -> argparse.ArgumentParser:
         description="Prior-constrained pathway/program-level virtual knockout interface.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    importer = sub.add_parser("import-data", help="Import h5ad, 10x mtx, 10x h5, or basic h5Seurat into workflow-ready h5ad with an overview figure.")
+    importer.add_argument("--input", required=True, help="Input file or folder.")
+    importer.add_argument("--format", required=True, choices=["h5ad", "10x_mtx", "10x_h5", "h5seurat"], help="Input format.")
+    importer.add_argument("--out-dir", default="results/import_data_demo")
+    importer.add_argument("--output-h5ad", default=None, help="Optional output h5ad path. Default: out-dir/imported_data.h5ad.")
+    importer.add_argument("--metadata-csv", default=None, help="Optional metadata CSV to join by cell id, e.g. KO labels or cell types.")
+    importer.add_argument("--cell-id-col", default="cell_id", help="Cell id column in metadata CSV.")
+    importer.set_defaults(func=run_import_data)
     fit = sub.add_parser("fit", help="Fit/evaluate virtual KO from a state-score CSV table.")
     fit.add_argument("--state-csv", required=True, help="CSV with one row per cell, one KO label column, and numeric state-score columns.")
     fit.add_argument("--ko-col", default="ko_target", help="Column containing control/KO labels.")
