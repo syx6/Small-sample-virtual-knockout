@@ -139,27 +139,42 @@ def main() -> None:
     chosen = chosen_info["feature"]
     short_name = chosen_info["peak_type"] + f" peak\n{chosen_info['chrom']}:{int(chosen_info['start'])}-{int(chosen_info['end'])}"
     order = ["control cells", "virtual KO cells", "true KO cells"]
-    sns.violinplot(
-        data=cells,
-        x="state",
-        y=chosen,
-        hue="state",
-        order=order,
-        hue_order=order,
-        palette={"control cells": "#BDBDBD", "virtual KO cells": "#E76F51", "true KO cells": "#2A9D8F"},
-        inner="quartile",
-        cut=0,
-        legend=False,
-        ax=ax,
-    )
-    low, high = np.nanquantile(cells[chosen].to_numpy(dtype=float), [0.01, 0.99])
-    if np.isfinite(low) and np.isfinite(high) and high > low:
-        pad = (high - low) * 0.08
-        ax.set_ylim(low - pad, high + pad)
-    ax.set_title("Single-cell peak accessibility distribution", fontsize=12, fontweight="bold")
+    sparse_rows = []
+    for state in order:
+        values = cells.loc[cells["state"].eq(state), chosen].to_numpy(dtype=float)
+        open_like = values > 0
+        sparse_rows.append(
+            {
+                "state": state,
+                "open_fraction": float(open_like.mean()),
+                "open_count": int(open_like.sum()),
+                "n_cells": int(len(values)),
+                "median": float(np.nanmedian(values)),
+                "p99": float(np.nanquantile(values, 0.99)),
+            }
+        )
+    sparse = pd.DataFrame(sparse_rows)
+    palette = {"control cells": "#BDBDBD", "virtual KO cells": "#E76F51", "true KO cells": "#2A9D8F"}
+    sns.barplot(data=sparse, x="state", y="open_fraction", hue="state", order=order, hue_order=order, palette=palette, legend=False, ax=ax)
+    ax.set_ylim(0, max(0.06, float(sparse["open_fraction"].max()) * 1.45))
+    for i, row in sparse.reset_index(drop=True).iterrows():
+        ax.text(
+            i,
+            row["open_fraction"] + ax.get_ylim()[1] * 0.035,
+            f"{row['open_fraction']*100:.1f}%\n({int(row['open_count'])}/{int(row['n_cells'])})",
+            ha="center",
+            va="bottom",
+            fontsize=8.5,
+        )
+    ax.set_title("Sparse peak open-like cell fraction", fontsize=12, fontweight="bold")
     ax.set_xlabel("")
-    ax.set_ylabel(short_name)
+    ax.set_ylabel("Open-like cells\n(score > 0)")
     ax.tick_params(axis="x", rotation=18)
+    note = (
+        short_name.replace("\n", " ") + "\n"
+        "Sparse peak: true KO is flat when all sampled cells are closed."
+    )
+    ax.text(0.02, 0.97, note, transform=ax.transAxes, va="top", fontsize=8.0, color="#555")
 
     fig.savefig(OUT / "19_atac_peak_level_visualization.png", dpi=220, bbox_inches="tight")
     plt.close(fig)
