@@ -41,6 +41,35 @@ metadata JSON 会记录：
 
 ## 2. 批量应用到普通 10X 或 multiome 数据
 
+应用前可以先检查 reference model：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli inspect-reference `
+  --reference-model results\reference_models\hmpcite_rna_adt_reference.pkl `
+  --target-kos STAT1,JAK2,STAT1+JAK2 `
+  --out-dir results\hmpcite_reference_inspection
+```
+
+输出：
+
+```text
+reference_summary.csv
+reference_prior_libraries.csv
+reference_state_features.csv
+reference_training_genes.csv
+reference_target_prior_coverage.csv
+reference_inspection_report.md
+```
+
+这个步骤回答：
+
+```text
+这个 reference model 学过多少 KO？
+有哪些状态特征？
+用了哪些 prior library？
+我要预测的 KO 在 pathway/TF/PPI/motif 先验里覆盖好不好？
+```
+
 一个命令可以同时预测多个单敲和双敲：
 
 ```powershell
@@ -59,11 +88,13 @@ applied_virtual_cells.csv
 predicted_ko_delta.csv
 target_interpretation.csv
 transfer_confidence.csv
+prior_coverage.csv
 apply_report.md
 prediction_only_report.md
 01_predicted_ko_delta_heatmap.png
 02_input_vs_virtual_pca.png
 03_transfer_confidence.png
+05_prior_coverage.png
 ```
 
 解释：
@@ -72,6 +103,9 @@ prediction_only_report.md
 - `applied_virtual_cells.csv`：输入细胞和虚拟 KO 细胞。
 - `target_interpretation.csv`：说明每个 target 是单敲、双敲还是探索性多基因 KO。
 - `transfer_confidence.csv`：说明 KO gene 是否在 reference 中见过，输入细胞是否偏离 reference 分布。
+- `prior_coverage.csv`：说明每个 KO 命中了多少 pathway/TF/PPI/motif prior。
+
+如果某个 KO 是 unseen gene，而且 `prior_coverage.csv` 里 `n_prior_terms_hit` 接近 0，那么这个预测应标记为低置信度。
 
 ## 3. Cell type 分层输出
 

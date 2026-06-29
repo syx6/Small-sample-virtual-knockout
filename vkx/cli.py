@@ -8,7 +8,7 @@ import pandas as pd
 from .core import run_virtual_ko
 from .interaction import run_double_interaction
 from .preprocess import csv_matrix_to_state_table, h5ad_to_state_scores, h5ad_to_state_table, parse_extra_obsm_specs
-from .reference import apply_reference_model, train_reference_model
+from .reference import apply_reference_model, inspect_reference_model, train_reference_model
 from .visualization import make_all_plots
 
 
@@ -183,6 +183,24 @@ def run_apply_reference(args: argparse.Namespace) -> None:
     write_analysis_mode(Path(args.out_dir), "prediction_only", "A saved perturbation reference model was applied to input cells. Without matching real KO labels in this input dataset, AUC/R2/MAE accuracy metrics are not computed.")
 
 
+def run_inspect_reference(args: argparse.Namespace) -> None:
+    result = inspect_reference_model(
+        reference_model=args.reference_model,
+        out_dir=args.out_dir,
+        target_kos=target_labels(args) if args.target_kos or args.holdouts else None,
+    )
+    summary = result["summary"]
+    print("Inspected reference virtual KO model:")
+    print(f"  dataset: {summary.get('dataset_name')}")
+    print(f"  version: {summary.get('version')}")
+    print(f"  training KO labels: {summary.get('n_training_ko_labels')}")
+    print(f"  training genes: {summary.get('n_training_genes')}")
+    print(f"  state features: {summary.get('n_state_features')}")
+    print(f"  prior terms: {summary.get('n_prior_terms')}")
+    if args.out_dir:
+        print(f"  report: {args.out_dir}\\reference_inspection_report.md")
+
+
 def run_double_interaction_command(args: argparse.Namespace) -> None:
     metrics, predictions = run_double_interaction(
         delta_csv=args.delta_csv,
@@ -297,6 +315,12 @@ def build_parser() -> argparse.ArgumentParser:
     apply_ref.add_argument("--cell-type-col", default=None, help="Optional obs/state CSV column for cell-type stratified prediction-only outputs.")
     apply_ref.add_argument("--seed", type=int, default=7)
     apply_ref.set_defaults(func=run_apply_reference)
+    inspect_ref = sub.add_parser("inspect-reference", help="Inspect a saved reference KO model before applying it.")
+    inspect_ref.add_argument("--reference-model", required=True)
+    inspect_ref.add_argument("--target-kos", default=None, help="Optional comma-separated KO targets to check prior coverage.")
+    inspect_ref.add_argument("--holdouts", default=None, help="Alias for --target-kos.")
+    inspect_ref.add_argument("--out-dir", default="results/reference_inspection")
+    inspect_ref.set_defaults(func=run_inspect_reference)
     double_interaction = sub.add_parser("double-interaction", help="Evaluate double-KO effects with additive and prior-based interaction residual models.")
     double_interaction.add_argument("--delta-csv", required=True, help="KO-level delta table containing single and double KO rows.")
     double_interaction.add_argument("--ko-col", default="ko_genes", help="Column containing KO gene labels such as CEBPB+CEBPA.")

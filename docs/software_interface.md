@@ -184,6 +184,7 @@ RNA + protein / multiome 数据建议先用 `--calibrate none`，因为多模态
 reference model v2 还新增了：
 
 - 模型 metadata JSON，记录训练 KO、训练基因、状态特征和支持能力。
+- `inspect-reference`，应用前检查 reference model 和目标 KO 的 prior 覆盖。
 - 批量 KO 输入，例如 `STAT1,JAK2,STAT1+JAK2`。
 - prediction-only 报告，明确普通 10X/无标签 multiome 不能报告真实准确率。
 - 可选 cell type 分层输出。
@@ -199,6 +200,15 @@ reference model v2 还新增了：
   --dataset-name "Papalexi ECCITE-seq reference" `
   --protein-obsm protein `
   --max-pathways 24
+```
+
+检查 reference model：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli inspect-reference `
+  --reference-model results\reference_models\papalexi_rna_protein_reference.pkl `
+  --target-kos STAT1,JAK2,STAT1+JAK2 `
+  --out-dir results\papalexi_reference_inspection
 ```
 
 应用到普通 h5ad 细胞：
@@ -217,11 +227,13 @@ reference model v2 还新增了：
 - `applied_virtual_cells.csv`
 - `predicted_ko_delta.csv`
 - `target_interpretation.csv`
+- `prior_coverage.csv`
 - `transfer_confidence.csv`
 - `prediction_only_report.md`
 - `01_predicted_ko_delta_heatmap.png`
 - `02_input_vs_virtual_pca.png`
 - `03_transfer_confidence.png`
+- `05_prior_coverage.png`
 - `04_cell_type_predicted_delta_heatmap.png`，如果提供 `--cell-type-col`
 - `apply_report.md`
 

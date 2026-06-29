@@ -47,6 +47,35 @@ def _deserialize_prior_terms(terms: list[dict]) -> list[tuple[str, set[str]]]:
     return [(item["term"], set(item["genes"]), float(item.get("weight", 1.0))) for item in terms]
 
 
+def _prior_coverage_rows(reference: dict, target_kos: list[str]) -> list[dict]:
+    prior_terms = _deserialize_prior_terms(reference.get("prior_terms") or [])
+    training_genes = set(reference.get("training_genes") or [])
+    rows = []
+    for ko in target_kos:
+        genes = set(split_ko(ko))
+        hits = []
+        weighted_hits = 0.0
+        for term_name, members, weight in prior_terms:
+            overlap = sorted(genes & members)
+            if not overlap:
+                continue
+            hits.append((term_name, overlap, weight))
+            weighted_hits += float(weight) * len(overlap) / max(1, len(genes))
+        top_terms = "; ".join(f"{name}({'+'.join(overlap)})" for name, overlap, _ in hits[:8])
+        rows.append(
+            {
+                "ko_target": ko,
+                "n_genes": len(genes),
+                "n_prior_terms_hit": len(hits),
+                "weighted_prior_hit_score": weighted_hits,
+                "genes_seen_in_reference": "+".join(sorted(genes & training_genes)),
+                "genes_unseen_in_reference": "+".join(sorted(genes - training_genes)),
+                "top_prior_terms": top_terms,
+            }
+        )
+    return rows
+
+
 def _load_training_state_from_h5ad(
     input_h5ad: str | Path,
     ko_col: str,
@@ -204,6 +233,103 @@ def load_reference_model(path: str | Path) -> dict:
         return pickle.load(handle)
 
 
+def inspect_reference_model(reference_model: str | Path, out_dir: str | Path | None = None, target_kos: list[str] | None = None) -> dict:
+    reference = load_reference_model(reference_model)
+    prior_terms = reference.get("prior_terms") or []
+    libraries = {}
+    for item in prior_terms:
+        term = str(item.get("term", "unknown"))
+        lib = term.split(":", 1)[0] if ":" in term else "unknown"
+        libraries.setdefault(lib, {"n_terms": 0, "mean_weight": []})
+        libraries[lib]["n_terms"] += 1
+        libraries[lib]["mean_weight"].append(float(item.get("weight", 1.0)))
+    prior_summary = pd.DataFrame(
+        [
+            {
+                "prior_library": lib,
+                "n_terms": values["n_terms"],
+                "mean_weight": float(np.mean(values["mean_weight"])) if values["mean_weight"] else np.nan,
+            }
+            for lib, values in sorted(libraries.items())
+        ]
+    )
+    feature_summary = pd.DataFrame(
+        {
+            "state_feature": reference.get("features", []),
+            "source_guess": [
+                "protein/ADT" if feature.startswith("protein_") else "ATAC/chromVAR/peak" if any(feature.startswith(prefix) for prefix in ["atac_", "tf_", "peak_", "chromvar_"]) else "pathway/program"
+                for feature in reference.get("features", [])
+            ],
+        }
+    )
+    gene_summary = pd.DataFrame({"training_gene": reference.get("training_genes", [])})
+    target_coverage = pd.DataFrame(_prior_coverage_rows(reference, target_kos or []))
+    summary = {
+        "version": reference.get("version"),
+        "model_type": reference.get("model_type"),
+        "dataset_name": reference.get("dataset_name"),
+        "n_training_ko_labels": len(reference.get("training_ko_labels", [])),
+        "n_training_genes": len(reference.get("training_genes", [])),
+        "n_state_features": len(reference.get("features", [])),
+        "n_prior_terms": len(prior_terms),
+    }
+    if out_dir:
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame([summary]).to_csv(out / "reference_summary.csv", index=False)
+        prior_summary.to_csv(out / "reference_prior_libraries.csv", index=False)
+        feature_summary.to_csv(out / "reference_state_features.csv", index=False)
+        gene_summary.to_csv(out / "reference_training_genes.csv", index=False)
+        if not target_coverage.empty:
+            target_coverage.to_csv(out / "reference_target_prior_coverage.csv", index=False)
+        _write_reference_inspection_report(reference, summary, prior_summary, feature_summary, target_coverage, out)
+    return {
+        "summary": summary,
+        "prior_libraries": prior_summary,
+        "state_features": feature_summary,
+        "training_genes": gene_summary,
+        "target_prior_coverage": target_coverage,
+    }
+
+
+def _write_reference_inspection_report(
+    reference: dict,
+    summary: dict,
+    prior_summary: pd.DataFrame,
+    feature_summary: pd.DataFrame,
+    target_coverage: pd.DataFrame,
+    out_dir: Path,
+) -> None:
+    coverage_text = "No target KO coverage requested."
+    if not target_coverage.empty:
+        coverage_text = target_coverage[["ko_target", "n_prior_terms_hit", "weighted_prior_hit_score", "genes_unseen_in_reference"]].round(3).to_string(index=False)
+    text = f"""# Reference Model Inspection Report
+
+## Summary
+
+- Dataset: {summary.get('dataset_name')}
+- Version: {summary.get('version')}
+- Model type: {summary.get('model_type')}
+- Training KO labels: {summary.get('n_training_ko_labels')}
+- Training genes: {summary.get('n_training_genes')}
+- State features: {summary.get('n_state_features')}
+- Prior terms: {summary.get('n_prior_terms')}
+
+## Prior Libraries
+
+{prior_summary.round(3).to_string(index=False)}
+
+## Target Prior Coverage
+
+{coverage_text}
+
+## Interpretation
+
+This report checks what the reference model has learned and whether requested KO genes are covered by the biological prior network. A target with few prior hits, unseen genes, or weak weighted prior score should be treated as lower confidence.
+"""
+    (out_dir / "reference_inspection_report.md").write_text(text, encoding="utf-8")
+
+
 def _align_features(frame: pd.DataFrame, features: list[str]) -> pd.DataFrame:
     aligned = frame.copy()
     for feature in features:
@@ -275,8 +401,9 @@ def apply_reference_model(
     deltas = pd.DataFrame(delta_rows)
     cells.to_csv(out_dir / "applied_virtual_cells.csv", index=False)
     deltas.to_csv(out_dir / "predicted_ko_delta.csv", index=False)
-    confidence = _write_transfer_confidence(reference, base, features, target_kos, out_dir)
-    _write_target_interpretation(reference, target_kos, out_dir)
+    prior_coverage = _write_prior_coverage(reference, target_kos, out_dir)
+    confidence = _write_transfer_confidence(reference, base, features, target_kos, out_dir, prior_coverage=prior_coverage)
+    _write_target_interpretation(reference, target_kos, out_dir, prior_coverage=prior_coverage)
     if cell_type_col and cell_type_col in cells.columns:
         _write_cell_type_outputs(cells, features, cell_type_col, out_dir)
     _plot_apply_delta(deltas, out_dir)
@@ -285,8 +412,11 @@ def apply_reference_model(
     return cells, deltas
 
 
-def _write_target_interpretation(reference: dict, target_kos: list[str], out_dir: Path) -> pd.DataFrame:
+def _write_target_interpretation(reference: dict, target_kos: list[str], out_dir: Path, prior_coverage: pd.DataFrame | None = None) -> pd.DataFrame:
     training_genes = set(reference.get("training_genes") or [])
+    prior_lookup = {}
+    if prior_coverage is not None and not prior_coverage.empty:
+        prior_lookup = prior_coverage.set_index("ko_target").to_dict(orient="index")
     rows = []
     for ko in target_kos:
         genes = split_ko(ko)
@@ -307,12 +437,43 @@ def _write_target_interpretation(reference: dict, target_kos: list[str], out_dir
                 "analysis_mode": mode,
                 "genes_seen_in_reference": "+".join([gene for gene in genes if gene in training_genes]),
                 "genes_unseen_in_reference": "+".join(missing),
+                "n_prior_terms_hit": prior_lookup.get(ko, {}).get("n_prior_terms_hit", np.nan),
+                "weighted_prior_hit_score": prior_lookup.get(ko, {}).get("weighted_prior_hit_score", np.nan),
                 "interpretation": note,
             }
         )
     table = pd.DataFrame(rows)
     table.to_csv(out_dir / "target_interpretation.csv", index=False)
     return table
+
+
+def _write_prior_coverage(reference: dict, target_kos: list[str], out_dir: Path) -> pd.DataFrame:
+    table = pd.DataFrame(_prior_coverage_rows(reference, target_kos))
+    table.to_csv(out_dir / "prior_coverage.csv", index=False)
+    _plot_prior_coverage(table, out_dir)
+    return table
+
+
+def _plot_prior_coverage(table: pd.DataFrame, out_dir: Path) -> None:
+    setup_plot()
+    if table.empty:
+        return
+    fig, ax = plt.subplots(figsize=(max(6.5, 2.5 * len(table)), 4.2), constrained_layout=True)
+    bars = ax.bar(table["ko_target"], table["n_prior_terms_hit"], color="#4C78A8", width=0.58)
+    ax.set_ylabel("Prior terms hit")
+    ax.set_title("KO Prior Coverage")
+    ax.set_xlabel("Requested virtual KO")
+    for bar, (_, row) in zip(bars, table.iterrows()):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.5,
+            f"score {row['weighted_prior_hit_score']:.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+    fig.savefig(out_dir / "05_prior_coverage.png", bbox_inches="tight", dpi=300)
+    plt.close(fig)
 
 
 def _write_cell_type_outputs(cells: pd.DataFrame, features: list[str], cell_type_col: str, out_dir: Path) -> pd.DataFrame:
@@ -352,7 +513,14 @@ def _plot_cell_type_delta(table: pd.DataFrame, cell_type_col: str, out_dir: Path
     plt.close(fig)
 
 
-def _write_transfer_confidence(reference: dict, base: pd.DataFrame, features: list[str], target_kos: list[str], out_dir: Path) -> pd.DataFrame:
+def _write_transfer_confidence(
+    reference: dict,
+    base: pd.DataFrame,
+    features: list[str],
+    target_kos: list[str],
+    out_dir: Path,
+    prior_coverage: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     rows = []
     feature_mean = reference.get("feature_mean")
     feature_std = reference.get("feature_std")
@@ -372,17 +540,25 @@ def _write_transfer_confidence(reference: dict, base: pd.DataFrame, features: li
         median_distance = np.nan
         frac_beyond_q95 = np.nan
         reference_q95 = np.nan
+    prior_lookup = {}
+    if prior_coverage is not None and not prior_coverage.empty:
+        prior_lookup = prior_coverage.set_index("ko_target").to_dict(orient="index")
 
     for ko in target_kos:
         genes = set(split_ko(ko))
         covered = sorted(genes & training_genes)
         missing = sorted(genes - training_genes)
+        prior_hit_count = float(prior_lookup.get(ko, {}).get("n_prior_terms_hit", np.nan))
+        prior_hit_score = float(prior_lookup.get(ko, {}).get("weighted_prior_hit_score", np.nan))
         if pd.isna(frac_beyond_q95):
             confidence = "unknown"
             reason = "reference model was trained before confidence metadata existed"
         elif missing:
             confidence = "low"
             reason = "one or more requested KO genes were not present in reference training labels"
+        elif pd.notna(prior_hit_count) and prior_hit_count < 2:
+            confidence = "low"
+            reason = "requested KO has weak pathway/TF/PPI/motif prior coverage"
         elif frac_beyond_q95 > 0.35:
             confidence = "low"
             reason = "many input cells are outside the reference state distribution"
@@ -400,6 +576,8 @@ def _write_transfer_confidence(reference: dict, base: pd.DataFrame, features: li
                 "median_reference_distance": median_distance,
                 "reference_q95_distance": reference_q95,
                 "fraction_cells_beyond_reference_q95": frac_beyond_q95,
+                "n_prior_terms_hit": prior_hit_count,
+                "weighted_prior_hit_score": prior_hit_score,
                 "ko_genes_seen_in_reference": "+".join(covered),
                 "ko_genes_missing_from_reference": "+".join(missing),
             }
@@ -529,10 +707,12 @@ Generated files:
 - `applied_virtual_cells.csv`
 - `predicted_ko_delta.csv`
 - `target_interpretation.csv`
+- `prior_coverage.csv`
 - `transfer_confidence.csv`
 - `01_predicted_ko_delta_heatmap.png`
 - `02_input_vs_virtual_pca.png`
 - `03_transfer_confidence.png`
+- `05_prior_coverage.png`
 - `cell_type_predicted_delta.csv` and `04_cell_type_predicted_delta_heatmap.png` when a cell-type column is provided.
 """
     (out_dir / "apply_report.md").write_text(text, encoding="utf-8")
@@ -559,5 +739,6 @@ This folder contains virtual knockout predictions for input cells.
 - `02_input_vs_virtual_pca.png`: visible movement from input cells to virtual KO cells.
 - `03_transfer_confidence.png`: whether the input cells and KO targets are close to the reference training regime.
 - `04_cell_type_predicted_delta_heatmap.png`: cell-type-specific predicted changes, when available.
+- `05_prior_coverage.png`: whether requested KO genes are covered by pathway/TF/PPI/motif priors.
 """
     (out_dir / "prediction_only_report.md").write_text(prediction, encoding="utf-8")

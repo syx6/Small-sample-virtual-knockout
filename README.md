@@ -136,6 +136,13 @@ target gene
 把 reference model 应用到普通 h5ad 细胞：
 
 ```powershell
+.\.venv\Scripts\python.exe -m vkx.cli inspect-reference `
+  --reference-model results\reference_models\papalexi_rna_protein_reference.pkl `
+  --target-kos STAT1,JAK2,STAT1+JAK2 `
+  --out-dir results\reference_inspection_demo
+```
+
+```powershell
 .\.venv\Scripts\python.exe -m vkx.cli apply-reference `
   --reference-model results\reference_models\papalexi_rna_protein_reference.pkl `
   --input-h5ad your_10x_data.h5ad `
