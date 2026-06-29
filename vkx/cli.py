@@ -157,6 +157,7 @@ def run_train_reference(args: argparse.Namespace) -> None:
     )
     print("Saved reference virtual KO model:")
     print(f"  model: {args.output_model}")
+    print(f"  metadata: {args.output_model}.metadata.json")
     print(f"  training KO labels: {len(reference['training_ko_labels'])}")
     print(f"  state features: {len(reference['features'])}")
 
@@ -170,10 +171,13 @@ def run_apply_reference(args: argparse.Namespace) -> None:
         out_dir=args.out_dir,
         max_cells=args.max_cells,
         seed=args.seed,
+        cell_type_col=args.cell_type_col,
     )
     print("Applied reference virtual KO model:")
     print(f"  virtual cells: {args.out_dir}\\applied_virtual_cells.csv")
     print(f"  predicted delta: {args.out_dir}\\predicted_ko_delta.csv")
+    print(f"  target interpretation: {args.out_dir}\\target_interpretation.csv")
+    print(f"  prediction-only report: {args.out_dir}\\prediction_only_report.md")
     print(f"  n cells rows: {len(cells)}")
     print(f"  n target KO: {len(deltas)}")
     write_analysis_mode(Path(args.out_dir), "prediction_only", "A saved perturbation reference model was applied to input cells. Without matching real KO labels in this input dataset, AUC/R2/MAE accuracy metrics are not computed.")
@@ -286,10 +290,11 @@ def build_parser() -> argparse.ArgumentParser:
     apply_ref.add_argument("--reference-model", required=True)
     apply_ref.add_argument("--input-h5ad", default=None, help="Ordinary h5ad to receive virtual KO.")
     apply_ref.add_argument("--state-csv", default=None, help="Optional precomputed state score CSV to receive virtual KO.")
-    apply_ref.add_argument("--target-kos", default=None, help="One target gene or pair, e.g. STAT1 or STAT1+JAK2.")
+    apply_ref.add_argument("--target-kos", default=None, help="Comma-separated targets. Each target can be one gene or one pair, e.g. STAT1,JAK2,STAT1+JAK2.")
     apply_ref.add_argument("--holdouts", default=None, help="Alias for --target-kos.")
     apply_ref.add_argument("--out-dir", default="results/reference_apply_demo")
     apply_ref.add_argument("--max-cells", type=int, default=800)
+    apply_ref.add_argument("--cell-type-col", default=None, help="Optional obs/state CSV column for cell-type stratified prediction-only outputs.")
     apply_ref.add_argument("--seed", type=int, default=7)
     apply_ref.set_defaults(func=run_apply_reference)
     double_interaction = sub.add_parser("double-interaction", help="Evaluate double-KO effects with additive and prior-based interaction residual models.")

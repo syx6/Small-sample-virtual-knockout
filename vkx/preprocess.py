@@ -337,10 +337,14 @@ def h5ad_to_state_scores_with_terms(
     extra_obsm: list[tuple[str, str]] | None = None,
     max_extra_features_per_obsm: int | None = None,
     extra_feature_selection: str = "variance",
+    obs_columns: list[str] | None = None,
 ) -> pd.DataFrame:
     adata = ad.read_h5ad(input_h5ad)
     frame = compute_pathway_scores_from_saved_terms(adata, terms)
     frame.insert(0, "cell_id", adata.obs_names.astype(str))
+    for col in obs_columns or []:
+        if col in adata.obs:
+            frame[col] = adata.obs[col].astype(str).to_numpy()
     extra = list(extra_obsm or [])
     if protein_obsm:
         extra.append((protein_obsm, protein_prefix))

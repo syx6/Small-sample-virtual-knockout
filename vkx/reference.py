@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pickle
+import json
 from pathlib import Path
 
 import anndata as ad
@@ -130,7 +131,12 @@ def train_reference_model(
     train_labels, train_delta, control_mean = build_delta_table(frame, "ko_target", features, holdouts=set())
     model = fit_pls(train_labels, train_delta, prior_terms)
     reference = {
-        "version": 1,
+        "version": 2,
+        "model_type": "prior_constrained_residual_pls_reference",
+        "supports_batch_ko": True,
+        "supports_prediction_only_application": True,
+        "supports_cell_type_stratification": True,
+        "supports_double_ko": True,
         "dataset_name": dataset_name,
         "input_kind": input_kind,
         "features": features,
@@ -153,12 +159,44 @@ def train_reference_model(
             "q95": float(np.nanquantile(train_distance, 0.95)),
         },
         "training_genes": sorted(perturb_genes),
+        "interpretation": {
+            "purpose": "Predict KO-induced state deltas and apply them to ordinary cells.",
+            "accuracy_boundary": "Accuracy metrics require real KO labels in the evaluation dataset. Unlabeled 10X/multiome data are prediction-only.",
+            "unseen_gene_boundary": "Unseen genes are predicted by pathway/TF/PPI/motif priors and should be treated as lower confidence when prior coverage is weak.",
+        },
     }
     output_model = Path(output_model)
     output_model.parent.mkdir(parents=True, exist_ok=True)
     with output_model.open("wb") as handle:
         pickle.dump(reference, handle)
+    _write_reference_metadata(reference, output_model)
     return reference
+
+
+def _write_reference_metadata(reference: dict, output_model: Path) -> None:
+    meta = {
+        "version": reference.get("version"),
+        "model_type": reference.get("model_type"),
+        "dataset_name": reference.get("dataset_name"),
+        "input_kind": reference.get("input_kind"),
+        "n_training_ko_labels": len(reference.get("training_ko_labels", [])),
+        "n_training_genes": len(reference.get("training_genes", [])),
+        "n_state_features": len(reference.get("features", [])),
+        "training_ko_labels": reference.get("training_ko_labels", []),
+        "training_genes": reference.get("training_genes", []),
+        "extra_obsm": reference.get("extra_obsm", []),
+        "max_extra_features_per_obsm": reference.get("max_extra_features_per_obsm"),
+        "extra_feature_selection": reference.get("extra_feature_selection"),
+        "supports": {
+            "batch_ko": bool(reference.get("supports_batch_ko")),
+            "double_ko": bool(reference.get("supports_double_ko")),
+            "cell_type_stratification": bool(reference.get("supports_cell_type_stratification")),
+            "prediction_only_application": bool(reference.get("supports_prediction_only_application")),
+        },
+        "interpretation": reference.get("interpretation", {}),
+    }
+    metadata_path = output_model.with_suffix(output_model.suffix + ".metadata.json")
+    metadata_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_reference_model(path: str | Path) -> dict:
@@ -171,7 +209,8 @@ def _align_features(frame: pd.DataFrame, features: list[str]) -> pd.DataFrame:
     for feature in features:
         if feature not in aligned.columns:
             aligned[feature] = 0.0
-    return aligned[["cell_id", *features]]
+    extra_cols = [col for col in aligned.columns if col not in {"cell_id", *features} and not pd.api.types.is_numeric_dtype(aligned[col])]
+    return aligned[["cell_id", *extra_cols, *features]]
 
 
 def apply_reference_model(
@@ -182,6 +221,7 @@ def apply_reference_model(
     out_dir: str | Path,
     max_cells: int = 800,
     seed: int = 7,
+    cell_type_col: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     reference = load_reference_model(reference_model)
     out_dir = Path(out_dir)
@@ -193,6 +233,9 @@ def apply_reference_model(
             protein_obsm=reference.get("protein_obsm"),
             protein_prefix=reference.get("protein_prefix", "protein"),
             extra_obsm=reference.get("extra_obsm") or [],
+            max_extra_features_per_obsm=reference.get("max_extra_features_per_obsm"),
+            extra_feature_selection=reference.get("extra_feature_selection", "variance"),
+            obs_columns=[cell_type_col] if cell_type_col else None,
         )
     elif state_csv:
         frame = pd.read_csv(state_csv)
@@ -216,11 +259,14 @@ def apply_reference_model(
         delta = reference["model"].predict(ko_prior_vector(ko, prior_terms).reshape(1, -1)).reshape(-1)
         virtual = x + delta.reshape(1, -1)
         delta_rows.append({"ko_target": ko, **{f"pred_delta_{feature}": value for feature, value in zip(features, delta)}})
-        before = base[["cell_id", *features]].copy()
+        before_cols = ["cell_id", *([cell_type_col] if cell_type_col and cell_type_col in base.columns else []), *features]
+        before = base[before_cols].copy()
         before["ko_target"] = ko
         before["state"] = "input cells"
         after = pd.DataFrame(virtual, columns=features)
         after.insert(0, "cell_id", base["cell_id"].to_numpy())
+        if cell_type_col and cell_type_col in base.columns:
+            after[cell_type_col] = base[cell_type_col].to_numpy()
         after["ko_target"] = ko
         after["state"] = "virtual KO cells"
         all_cells.extend([before, after])
@@ -230,10 +276,80 @@ def apply_reference_model(
     cells.to_csv(out_dir / "applied_virtual_cells.csv", index=False)
     deltas.to_csv(out_dir / "predicted_ko_delta.csv", index=False)
     confidence = _write_transfer_confidence(reference, base, features, target_kos, out_dir)
+    _write_target_interpretation(reference, target_kos, out_dir)
+    if cell_type_col and cell_type_col in cells.columns:
+        _write_cell_type_outputs(cells, features, cell_type_col, out_dir)
     _plot_apply_delta(deltas, out_dir)
     _plot_apply_pca(cells, features, out_dir)
-    _write_apply_report(reference, target_kos, out_dir, confidence)
+    _write_apply_report(reference, target_kos, out_dir, confidence, cell_type_col=cell_type_col)
     return cells, deltas
+
+
+def _write_target_interpretation(reference: dict, target_kos: list[str], out_dir: Path) -> pd.DataFrame:
+    training_genes = set(reference.get("training_genes") or [])
+    rows = []
+    for ko in target_kos:
+        genes = split_ko(ko)
+        missing = [gene for gene in genes if gene not in training_genes]
+        if len(genes) == 1:
+            mode = "single_ko"
+            note = "single-gene reference application"
+        elif len(genes) == 2:
+            mode = "double_ko_additive_prior_delta"
+            note = "double-KO prediction uses the learned prior-constrained delta for the pair; if real double-KO labels are available, run double-interaction for accuracy benchmarking"
+        else:
+            mode = "multi_gene_exploratory"
+            note = "more than two genes is exploratory and should be treated as low confidence unless specifically validated"
+        rows.append(
+            {
+                "ko_target": ko,
+                "n_genes": len(genes),
+                "analysis_mode": mode,
+                "genes_seen_in_reference": "+".join([gene for gene in genes if gene in training_genes]),
+                "genes_unseen_in_reference": "+".join(missing),
+                "interpretation": note,
+            }
+        )
+    table = pd.DataFrame(rows)
+    table.to_csv(out_dir / "target_interpretation.csv", index=False)
+    return table
+
+
+def _write_cell_type_outputs(cells: pd.DataFrame, features: list[str], cell_type_col: str, out_dir: Path) -> pd.DataFrame:
+    rows = []
+    grouped = cells.groupby(["ko_target", cell_type_col, "state"], observed=True)
+    means = grouped[features].mean().reset_index()
+    for (ko, cell_type), sub in means.groupby(["ko_target", cell_type_col], observed=True):
+        before = sub.loc[sub["state"] == "input cells", features]
+        after = sub.loc[sub["state"] == "virtual KO cells", features]
+        if before.empty or after.empty:
+            continue
+        delta = after.iloc[0].to_numpy(dtype=float) - before.iloc[0].to_numpy(dtype=float)
+        for feature, value in zip(features, delta):
+            rows.append({"ko_target": ko, cell_type_col: cell_type, "feature": feature, "predicted_delta": value})
+    table = pd.DataFrame(rows)
+    table.to_csv(out_dir / "cell_type_predicted_delta.csv", index=False)
+    if not table.empty:
+        _plot_cell_type_delta(table, cell_type_col, out_dir)
+    return table
+
+
+def _plot_cell_type_delta(table: pd.DataFrame, cell_type_col: str, out_dir: Path, max_features: int = 12) -> None:
+    setup_plot()
+    score = table.groupby("feature")["predicted_delta"].apply(lambda x: np.max(np.abs(x))).sort_values(ascending=False)
+    keep = list(score.head(max_features).index)
+    plot = table.loc[table["feature"].isin(keep)].copy()
+    plot["target_cell_type"] = plot["ko_target"].astype(str) + " | " + plot[cell_type_col].astype(str)
+    heat = plot.pivot_table(index="feature", columns="target_cell_type", values="predicted_delta", aggfunc="mean")
+    heat.index = [wrap_label(idx.replace("pathway_", "").replace("protein_", "").replace("program_", ""), 22) for idx in heat.index]
+    vmax = np.nanmax(np.abs(heat.to_numpy()))
+    fig, ax = plt.subplots(figsize=(max(7, 0.7 * len(heat.columns) + 4), max(5, 0.45 * len(heat) + 2)), constrained_layout=True)
+    sns.heatmap(heat, cmap="vlag", center=0, vmin=-vmax, vmax=vmax, annot=False, cbar_kws={"label": "predicted cell-type delta"}, ax=ax)
+    ax.set_title("Prediction-only cell-type stratified virtual KO effects")
+    ax.set_xlabel("KO | cell type")
+    ax.set_ylabel("")
+    fig.savefig(out_dir / "04_cell_type_predicted_delta_heatmap.png", bbox_inches="tight", dpi=300)
+    plt.close(fig)
 
 
 def _write_transfer_confidence(reference: dict, base: pd.DataFrame, features: list[str], target_kos: list[str], out_dir: Path) -> pd.DataFrame:
@@ -367,7 +483,13 @@ def _plot_apply_pca(cells: pd.DataFrame, features: list[str], out_dir: Path) -> 
     plt.close(fig)
 
 
-def _write_apply_report(reference: dict, target_kos: list[str], out_dir: Path, confidence: pd.DataFrame | None = None) -> None:
+def _write_apply_report(
+    reference: dict,
+    target_kos: list[str],
+    out_dir: Path,
+    confidence: pd.DataFrame | None = None,
+    cell_type_col: str | None = None,
+) -> None:
     confidence_text = "not available"
     if confidence is not None and not confidence.empty:
         confidence_text = "\n" + confidence.round(3).to_string(index=False)
@@ -391,6 +513,13 @@ This output applies a reference perturbation model to input cells that may not h
 
 These outputs are predictions only. If the input dataset does not contain real KO labels, the software cannot calculate true-vs-virtual accuracy, AUC, or distribution improvement on that dataset.
 
+This is the correct mode for ordinary 10X, DOGMA-seq, TEA-seq or other unlabeled multiome data. The plots show predicted state shifts, not validated accuracy.
+
+## Batch and Cell-Type Output
+
+- Batch KO targets requested: {len(target_kos)}
+- Cell-type stratification column: {cell_type_col or 'not provided'}
+
 ## Transfer Confidence
 
 {confidence_text}
@@ -399,9 +528,36 @@ Generated files:
 
 - `applied_virtual_cells.csv`
 - `predicted_ko_delta.csv`
+- `target_interpretation.csv`
 - `transfer_confidence.csv`
 - `01_predicted_ko_delta_heatmap.png`
 - `02_input_vs_virtual_pca.png`
 - `03_transfer_confidence.png`
+- `cell_type_predicted_delta.csv` and `04_cell_type_predicted_delta_heatmap.png` when a cell-type column is provided.
 """
     (out_dir / "apply_report.md").write_text(text, encoding="utf-8")
+    prediction = f"""# Prediction-Only 10X / Multiome Application Report
+
+This folder contains virtual knockout predictions for input cells.
+
+## What the Results Mean
+
+- The reference model predicts how pathway/protein/ATAC state features may move after the requested KO.
+- The input cells are shifted by the predicted KO delta to create virtual KO cells.
+- If the input data do not contain real KO labels, these results are not an internal accuracy benchmark.
+
+## What Is Not Reported
+
+- No true-vs-virtual accuracy.
+- No dataset-specific ROC-AUC.
+- No dataset-specific R2/MAE.
+- No claim that the prediction has been experimentally validated in this input dataset.
+
+## What To Use
+
+- `01_predicted_ko_delta_heatmap.png`: which state features are predicted to increase or decrease.
+- `02_input_vs_virtual_pca.png`: visible movement from input cells to virtual KO cells.
+- `03_transfer_confidence.png`: whether the input cells and KO targets are close to the reference training regime.
+- `04_cell_type_predicted_delta_heatmap.png`: cell-type-specific predicted changes, when available.
+"""
+    (out_dir / "prediction_only_report.md").write_text(prediction, encoding="utf-8")

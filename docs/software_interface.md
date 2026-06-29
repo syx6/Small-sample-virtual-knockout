@@ -179,9 +179,14 @@ RNA + protein / multiome 数据建议先用 `--calibrate none`，因为多模态
 - 外部 perturb-seq / CRISPR reference 数据，或者
 - 以后保存好的 reference virtual KO model。
 
-当前版本已经支持普通 10X 的自动状态转换；下一步会把 reference model 的训练、保存、加载和应用做成正式接口。
+当前版本已经支持普通 10X 的自动状态转换，也已经把 reference model 的训练、保存、加载和应用做成正式接口。
 
-当前已经新增了 reference model 的基础接口：
+reference model v2 还新增了：
+
+- 模型 metadata JSON，记录训练 KO、训练基因、状态特征和支持能力。
+- 批量 KO 输入，例如 `STAT1,JAK2,STAT1+JAK2`。
+- prediction-only 报告，明确普通 10X/无标签 multiome 不能报告真实准确率。
+- 可选 cell type 分层输出。
 
 训练 reference model：
 
@@ -202,16 +207,22 @@ RNA + protein / multiome 数据建议先用 `--calibrate none`，因为多模态
 .\.venv\Scripts\python.exe -m vkx.cli apply-reference `
   --reference-model results\reference_models\papalexi_rna_protein_reference.pkl `
   --input-h5ad your_10x_data.h5ad `
-  --target-kos STAT1 `
-  --out-dir results\your_10x_virtual_STAT1
+  --target-kos STAT1,JAK2,STAT1+JAK2 `
+  --cell-type-col cell_type `
+  --out-dir results\your_10x_virtual_ko_batch
 ```
 
 输出包括：
 
 - `applied_virtual_cells.csv`
 - `predicted_ko_delta.csv`
+- `target_interpretation.csv`
+- `transfer_confidence.csv`
+- `prediction_only_report.md`
 - `01_predicted_ko_delta_heatmap.png`
 - `02_input_vs_virtual_pca.png`
+- `03_transfer_confidence.png`
+- `04_cell_type_predicted_delta_heatmap.png`，如果提供 `--cell-type-col`
 - `apply_report.md`
 
 注意：`apply-reference` 是 prediction-only 模式。如果输入数据没有真实 KO 标签，不会输出 AUC、distribution improvement 或 true-vs-virtual heatmap。
@@ -329,13 +340,17 @@ python -m vkx.cli run
 - 原始 CSV gene expression 矩阵输入。
 - 普通 10X h5ad 的 pathway/program state score 自动转换。
 - 可选 protein/ADT obsm 输入。
+- 可选 ATAC/gene activity/chromVAR/peak obsm 输入。
 - 自动 RNA pathway/program score。
 - 自动结果图：summary、heatmap、UMAP、AUC。
+- reference model 训练和应用。
+- 批量单敲/双敲 prediction-only 应用。
+- cell type 分层 prediction-only 输出。
 
 下一步需要继续扩展：
 
-- 多基因 KO 组合效应专项评估。
-- 普通 10X + 外部 reference perturbation model 的一键虚拟 KO 应用。
-- ATAC/gene activity obsm 的专门命名和可视化。
-- batch/cell type covariate 的显式建模。
+- 多基因 KO 组合效应的主接口深度集成。
+- 真正 RNA+ADT+ATAC 且带 perturbation 标签的公开 benchmark。
+- ATAC peak-level 调控先验继续增强。
+- batch covariate 的显式建模。
 - 从 Seurat/10x 等格式直接导入。

@@ -87,6 +87,17 @@ def _library_weight(stem: str) -> float:
     return weights.get(stem, 1.0)
 
 
+def _mechanism_weight(term: str) -> float:
+    upper = term.upper()
+    if any(word in upper for word in ["TGFB", "TGF_BETA", "TGF-BETA", "SMAD"]):
+        return 1.35
+    if any(word in upper for word in ["MAPK", "ERK", "JNK", "P38", "RAS", "RAF", "MEK"]):
+        return 1.30
+    if any(word in upper for word in ["MOTIF", "CHROMVAR", "TF_TARGET", "TRANSCRIPTION_FACTOR"]):
+        return 1.20
+    return 1.0
+
+
 def _term_gene_token(term: str) -> str | None:
     token = term.split()[0].upper() if term.split() else ""
     return token if GENE_RE.match(token) else None
@@ -110,7 +121,12 @@ def select_prior_terms(prior_dir: Path, perturb_genes: set[str], max_terms_per_l
             direct_gene = _term_gene_token(term)
             direct_hit = bool(direct_gene and direct_gene in perturb_genes)
             coverage = overlap / max(1, len(genes))
-            weight = _library_weight(path.stem) * (1.75 if direct_hit and include_direct else 1.0) * (1.0 + min(1.0, 8.0 * coverage))
+            weight = (
+                _library_weight(path.stem)
+                * _mechanism_weight(term)
+                * (1.75 if direct_hit and include_direct else 1.0)
+                * (1.0 + min(1.0, 8.0 * coverage))
+            )
             score = (direct_hit, overlap, coverage, -len(genes))
             scored.append((score, f"{path.stem}:{term}", genes, float(weight)))
         scored.sort(reverse=True, key=lambda item: item[0])

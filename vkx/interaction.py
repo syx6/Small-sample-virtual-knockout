@@ -19,7 +19,19 @@ from .visualization import setup_plot
 GENE_RE = re.compile(r"^[A-Z0-9.-]+$")
 
 
-def _select_terms(prior_dir: Path, perturb_genes: set[str], max_terms_per_library: int = 180) -> list[tuple[str, set[str]]]:
+def _mechanism_weight(term: str, library: str) -> float:
+    upper = term.upper()
+    weight = 1.0
+    if library in {"tf_target", "atac_motif_tf", "motif_tf_target"}:
+        weight *= 1.45
+    if any(word in upper for word in ["TGFB", "TGF_BETA", "TGF-BETA", "SMAD"]):
+        weight *= 1.35
+    if any(word in upper for word in ["MAPK", "ERK", "JNK", "P38", "RAS", "RAF", "MEK"]):
+        weight *= 1.30
+    return weight
+
+
+def _select_terms(prior_dir: Path, perturb_genes: set[str], max_terms_per_library: int = 180) -> list[tuple[str, set[str], float]]:
     selected = []
     for path in sorted(prior_dir.glob("*.gmt")):
         scored = []
@@ -27,9 +39,10 @@ def _select_terms(prior_dir: Path, perturb_genes: set[str], max_terms_per_librar
             overlap = len(genes & perturb_genes)
             if overlap == 0 or len(genes) < 5 or len(genes) > 800:
                 continue
-            scored.append(((overlap, -len(genes)), f"{path.stem}:{term}", genes))
+            weight = _mechanism_weight(term, path.stem) * (1.0 + min(1.0, 8.0 * overlap / max(1, len(genes))))
+            scored.append(((overlap, weight, -len(genes)), f"{path.stem}:{term}", genes, weight))
         scored.sort(reverse=True, key=lambda item: item[0])
-        selected.extend((name, genes) for _, name, genes in scored[:max_terms_per_library])
+        selected.extend((name, genes, weight) for _, name, genes, weight in scored[:max_terms_per_library])
     return selected
 
 
@@ -38,12 +51,14 @@ def _term_features(labels: pd.Series, terms: list[tuple[str, set[str]]]) -> spar
     for i, label in enumerate(labels.astype(str)):
         genes = set(split_ko(label))
         denom = max(1, len(genes))
-        for j, (_, members) in enumerate(terms):
+        for j, term_entry in enumerate(terms):
+            members = term_entry[1]
+            weight = float(term_entry[2]) if len(term_entry) >= 3 else 1.0
             overlap = len(genes & members)
             if overlap:
                 rows.append(i)
                 cols.append(j)
-                data.append(overlap / denom)
+                data.append(weight * overlap / denom)
     return sparse.csr_matrix((data, (rows, cols)), shape=(len(labels), len(terms)))
 
 
@@ -54,11 +69,13 @@ def _pair_interaction_features(labels: pd.Series, terms: list[tuple[str, set[str
         if len(genes) < 2:
             continue
         g1, g2 = genes[:2]
-        for j, (_, members) in enumerate(terms):
+        for j, term_entry in enumerate(terms):
+            members = term_entry[1]
+            weight = float(term_entry[2]) if len(term_entry) >= 3 else 1.0
             if g1 in members and g2 in members:
                 rows.append(i)
                 cols.append(j)
-                data.append(1.0)
+                data.append(weight)
     return sparse.csr_matrix((data, (rows, cols)), shape=(len(labels), len(terms)))
 
 
