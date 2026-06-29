@@ -191,23 +191,102 @@ def calibration_factors(loo_pred: np.ndarray, truth: np.ndarray, mode: str) -> t
     return candidates[best], best
 
 
-def shape_factors(frame: pd.DataFrame, ko_col: str, features: list[str], holdouts: set[str], mode: str) -> np.ndarray:
+def shape_profile(frame: pd.DataFrame, ko_col: str, features: list[str], holdouts: set[str], mode: str) -> dict:
+    profile: dict = {"mode": mode}
     if mode == "none":
-        return np.ones(len(features), dtype=float)
+        profile["shape_alpha"] = np.ones(len(features), dtype=float)
+        return profile
     ctrl = frame.loc[control_mask(frame[ko_col]), features].to_numpy(dtype=float)
+    ctrl_mean = np.nanmean(ctrl, axis=0)
     ctrl_std = np.nanstd(ctrl, axis=0)
     ctrl_std = np.where(ctrl_std < 1e-6, 1.0, ctrl_std)
+    eps = 1e-9
+    ctrl_open_fraction = np.nanmean(ctrl > eps, axis=0)
+    ctrl_min = np.nanmin(ctrl, axis=0)
     ratios = []
+    open_fractions = []
+    centered_quantiles = []
+    grid = np.asarray([0.00, 0.01, 0.03, 0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.90, 0.95, 0.97, 0.99, 1.00])
     for ko, group in frame.loc[~control_mask(frame[ko_col])].groupby(ko_col, observed=True):
         ko = str(ko)
         if ko in holdouts or len(group) < 3:
             continue
-        std = np.nanstd(group[features].to_numpy(dtype=float), axis=0)
+        values = group[features].to_numpy(dtype=float)
+        std = np.nanstd(values, axis=0)
         ratios.append(std / ctrl_std)
+        open_fractions.append(np.nanmean(values > eps, axis=0))
+        centered = values - np.nanmean(values, axis=0).reshape(1, -1)
+        centered_quantiles.append(np.nanquantile(centered, grid, axis=0))
     if not ratios:
-        return np.ones(len(features), dtype=float)
+        profile["shape_alpha"] = np.ones(len(features), dtype=float)
+        return profile
     ratio = np.nanmedian(np.vstack(ratios), axis=0)
-    return np.clip(np.nan_to_num(ratio, nan=1.0, posinf=1.0, neginf=1.0), 0.45, 2.20)
+    profile["shape_alpha"] = np.clip(np.nan_to_num(ratio, nan=1.0, posinf=1.0, neginf=1.0), 0.45, 2.20)
+    if mode == "quantile" and centered_quantiles:
+        target_quantiles = np.nanmedian(np.stack(centered_quantiles, axis=0), axis=0)
+        target_quantiles = np.nan_to_num(target_quantiles, nan=0.0, posinf=0.0, neginf=0.0)
+        # Keep the learned quantile shape anchored to the training KO variance scale but bounded.
+        target_quantiles = np.clip(target_quantiles, -6.0, 6.0)
+        target_open_fraction = np.nanmedian(np.vstack(open_fractions), axis=0)
+        target_open_fraction = np.clip(np.nan_to_num(target_open_fraction, nan=ctrl_open_fraction), 0.0, 1.0)
+        sparse_mask = (ctrl_min >= -eps) & ((ctrl_open_fraction < 0.98) | (target_open_fraction < 0.98))
+        hard_zero_mask = sparse_mask.copy()
+        profile["quantile_grid"] = grid
+        profile["target_centered_quantiles"] = target_quantiles
+        profile["target_open_fraction"] = target_open_fraction
+        profile["control_open_fraction"] = ctrl_open_fraction
+        profile["sparse_nonnegative_mask"] = sparse_mask
+        profile["hard_zero_mask"] = hard_zero_mask
+        profile["control_mean"] = ctrl_mean
+    return profile
+
+
+def apply_shape_calibration(ctrl: np.ndarray, control_mean: np.ndarray, pred_delta: np.ndarray, profile: dict) -> np.ndarray:
+    mode = profile.get("mode", "none")
+    if mode == "quantile" and "target_centered_quantiles" in profile:
+        grid = np.asarray(profile["quantile_grid"], dtype=float)
+        target = np.asarray(profile["target_centered_quantiles"], dtype=float)
+        shaped = np.zeros_like(ctrl, dtype=float)
+        n = ctrl.shape[0]
+        if n <= 1:
+            return control_mean.reshape(1, -1) + pred_delta.reshape(1, -1)
+        target_open = np.asarray(profile.get("target_open_fraction", np.ones(ctrl.shape[1])), dtype=float)
+        sparse_mask = np.asarray(profile.get("sparse_nonnegative_mask", np.zeros(ctrl.shape[1], dtype=bool)), dtype=bool)
+        hard_zero_mask = np.asarray(profile.get("hard_zero_mask", sparse_mask), dtype=bool)
+        for j in range(ctrl.shape[1]):
+            order = np.argsort(ctrl[:, j], kind="mergesort")
+            pct = np.empty(n, dtype=float)
+            pct[order] = np.linspace(0.0, 1.0, n)
+            mapped = np.interp(pct, grid, target[:, j])
+            if sparse_mask[j]:
+                open_fraction = float(np.clip(target_open[j], 0.0, 1.0))
+                if open_fraction <= 0.0:
+                    mapped = np.full(n, np.interp(0.0, grid, target[:, j]), dtype=float)
+                elif open_fraction < 0.98:
+                    open_start = 1.0 - open_fraction
+                    closed_level = float(np.interp(open_start, grid, target[:, j]))
+                    mapped = np.where(pct < open_start, closed_level, mapped)
+            shaped[:, j] = mapped
+        virtual = control_mean.reshape(1, -1) + shaped + pred_delta.reshape(1, -1)
+        for j in np.where(hard_zero_mask)[0]:
+            open_fraction = float(np.clip(target_open[j], 0.0, 1.0))
+            n_open = int(round(open_fraction * n))
+            if n_open <= 0:
+                virtual[:, j] = 0.0
+                continue
+            if n_open >= n:
+                virtual[:, j] = np.maximum(virtual[:, j], 0.0)
+                continue
+            desired_mean = float(control_mean[j] + pred_delta[j])
+            order = np.argsort(virtual[:, j], kind="mergesort")
+            closed = order[: n - n_open]
+            opened = order[n - n_open :]
+            virtual[closed, j] = 0.0
+            needed = desired_mean * n - float(np.sum(virtual[:, j]))
+            virtual[opened, j] = np.maximum(virtual[opened, j] + needed / max(1, len(opened)), 0.0)
+        return virtual
+    shape_alpha = np.asarray(profile.get("shape_alpha", np.ones(ctrl.shape[1])), dtype=float)
+    return control_mean.reshape(1, -1) + (ctrl - control_mean.reshape(1, -1)) * shape_alpha.reshape(1, -1) + pred_delta.reshape(1, -1)
 
 
 def feature_columns(frame: pd.DataFrame, ko_col: str, explicit: list[str] | None = None) -> list[str]:
@@ -278,7 +357,12 @@ def run_virtual_ko(
     model = fit_pls(train_labels, train_delta, terms)
     loo_pred = loo_training_predictions(train_labels, train_delta, terms)
     alpha, calibration_method = calibration_factors(loo_pred, train_delta, calibrate)
-    shape_alpha = shape_factors(frame, ko_col, features, holdout_set, shape_calibrate)
+    shape = shape_profile(frame, ko_col, features, holdout_set, shape_calibrate)
+    shape_alpha = np.asarray(shape.get("shape_alpha", np.ones(len(features))), dtype=float)
+    target_open_fraction = np.asarray(shape.get("target_open_fraction", np.full(len(features), np.nan)), dtype=float)
+    control_open_fraction = np.asarray(shape.get("control_open_fraction", np.full(len(features), np.nan)), dtype=float)
+    sparse_nonnegative = np.asarray(shape.get("sparse_nonnegative_mask", np.zeros(len(features), dtype=bool)), dtype=bool)
+    hard_zero_shape = np.asarray(shape.get("hard_zero_mask", np.zeros(len(features), dtype=bool)), dtype=bool)
 
     control = frame.loc[control_mask(frame[ko_col]), features].to_numpy(dtype=float)
     control_mean = np.nanmean(control, axis=0)
@@ -289,7 +373,7 @@ def run_virtual_ko(
             continue
         ctrl = control[rng.integers(0, len(control), size=len(true))]
         pred_delta = model.predict(ko_prior_vector(ko, terms).reshape(1, -1)).reshape(-1) * alpha
-        virtual = control_mean.reshape(1, -1) + (ctrl - control_mean.reshape(1, -1)) * shape_alpha.reshape(1, -1) + pred_delta.reshape(1, -1)
+        virtual = apply_shape_calibration(ctrl, control_mean, pred_delta, shape)
         true_delta = true.mean(axis=0) - ctrl.mean(axis=0)
         denom = np.linalg.norm(true_delta) * np.linalg.norm(pred_delta)
         delta_row = {
@@ -359,6 +443,10 @@ def run_virtual_ko(
             "alpha": alpha,
             "calibration_method": calibration_method,
             "shape_alpha": shape_alpha,
+            "control_open_fraction": control_open_fraction,
+            "target_open_fraction": target_open_fraction,
+            "sparse_nonnegative_shape_feature": sparse_nonnegative,
+            "hard_zero_shape_feature": hard_zero_shape,
             "shape_calibration_method": shape_calibrate,
         }
     )

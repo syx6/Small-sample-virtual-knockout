@@ -167,23 +167,25 @@ benchmark_readiness_report.md
 - motif/TF-target weighted prior
 - target locus + marker peak + KO effect + accessibility + motif/TF prior 综合打分
 - `selection_reason` 和 peak regulatory score 输出
+- variance shape calibration
+- zero-inflated / quantile shape calibration，用于记录 peak 开放比例并校准分位数形状；对原始非负 peak/count 才启用 hard-zero open/closed 约束
 
 新增输出：
 
 ```text
 data/scperturb_atac/liscovitch_k562_selected_peak_metadata.csv
 data/scperturb_atac/liscovitch_k562_peak_regulatory_prior_scores_top1000.csv
-results/scperturb_atac_regulatory_peak_prior_kdm6a/05_atac_peak_level_changes.png
+results/scperturb_atac_regulatory_peak_prior_quantile_kdm6a/05_atac_peak_level_changes.png
 ```
 
 结果：
 
 ```text
-KDM6A regulatory peak prior + shape calibration:
+KDM6A regulatory peak prior + quantile shape calibration:
 ROC-AUC = 0.674
 direction cosine = 0.771
-distribution improvement = -0.059
-improved fraction = 0.513
+distribution improvement = 0.166
+improved fraction = 0.788
 ```
 
 下一步继续增强：
