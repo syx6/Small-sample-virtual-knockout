@@ -78,19 +78,65 @@ import_report.md
 
 下一步接入规则：
 
-1. 用 `import-data` 或专门脚本转成 h5ad。
-2. RNA 放入 `adata.X`。
-3. ADT/protein 放入 `adata.obsm["protein"]`。
-4. ATAC gene activity / chromVAR / peak score 放入 `adata.obsm["atac"]`、`adata.obsm["chromvar"]`、`adata.obsm["peak"]`。
-5. perturbation 标签放入 `adata.obs["ko_target"]`。
-6. 先检查 benchmark readiness：
+1. 如果 RNA 和 ATAC 是分开的矩阵，先用 `assemble-multiome` 组装成 h5ad：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli assemble-multiome `
+  --rna-input path\to\gex_matrix `
+  --rna-format 10x_mtx `
+  --atac-input path\to\atac_matrix `
+  --atac-format 10x_mtx `
+  --metadata-csv metadata_with_ko.csv `
+  --cell-id-col cell_id `
+  --ko-col ko_target `
+  --max-atac-features 500 `
+  --output-h5ad data\public_multiome_perturbation.h5ad `
+  --out-dir results\public_multiome_assembly
+```
+
+固定输出：
+
+```text
+multiome_assembly_summary.csv
+multiome_assembly_overview.png
+multiome_assembly_report.md
+```
+
+2. 如果数据已经是整合好的 h5ad，可以跳过组装。
+3. h5ad 内部推荐结构：
+
+```text
+adata.X                  RNA matrix
+adata.var_names          gene symbols
+adata.obs["ko_target"]   perturbation labels
+adata.obsm["protein"]    optional ADT/protein
+adata.obsm["atac"]       ATAC/gene activity/selected peak matrix
+adata.obsm["chromvar"]   optional motif activity
+adata.obsm["peak"]       optional peak-level matrix
+```
+
+4. 检查 benchmark readiness：
 
 ```powershell
 .\.venv\Scripts\python.exe -m vkx.cli validate-benchmark `
-  --input-h5ad data\public_trimodal_perturbation.h5ad `
+  --input-h5ad data\public_multiome_perturbation.h5ad `
   --ko-col ko_target `
   --extra-obsm protein:protein,atac:atac,chromvar:tf,peak:peak `
   --out-dir results\public_trimodal_readiness
+```
+
+5. 如果 readiness 是 `ok`，再运行正式 benchmark：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli run `
+  --input-h5ad data\public_multiome_perturbation.h5ad `
+  --ko-col ko_target `
+  --target-kos GENE1,GENE2,GENE1+GENE2 `
+  --prior-dir data\priors `
+  --extra-obsm protein:protein,atac:atac,chromvar:tf,peak:peak `
+  --max-extra-features-per-obsm 100 `
+  --extra-feature-selection hybrid `
+  --out-dir results\public_trimodal_benchmark
 ```
 
 固定输出：
@@ -101,20 +147,6 @@ benchmark_label_counts.csv
 benchmark_overview.png
 benchmark_modalities.png
 benchmark_readiness_report.md
-```
-
-7. 如果 readiness 是 `ok`，再运行正式 benchmark：
-
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli run `
-  --input-h5ad data\public_trimodal_perturbation.h5ad `
-  --ko-col ko_target `
-  --target-kos GENE1,GENE2,GENE1+GENE2 `
-  --prior-dir data\priors `
-  --extra-obsm protein:protein,atac:atac,chromvar:tf,peak:peak `
-  --max-extra-features-per-obsm 100 `
-  --extra-feature-selection hybrid `
-  --out-dir results\public_trimodal_benchmark
 ```
 
 必须输出图：

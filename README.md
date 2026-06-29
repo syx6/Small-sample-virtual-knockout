@@ -292,6 +292,28 @@ results/reference_apply_stat1_demo
 
 这一步会告诉用户：有没有 KO 标签、有没有 control、每个 KO 有多少细胞、检测到哪些模态，以及这个数据能不能作为真实准确性 benchmark。
 
+如果 RNA 和 ATAC 是分开的矩阵，可以先组装：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli assemble-multiome `
+  --rna-input path\to\rna_matrix `
+  --rna-format 10x_mtx `
+  --atac-input path\to\atac_matrix `
+  --atac-format 10x_mtx `
+  --metadata-csv metadata_with_ko.csv `
+  --cell-id-col cell_id `
+  --ko-col ko_target `
+  --max-atac-features 500 `
+  --output-h5ad data\public_multiome_perturbation.h5ad `
+  --out-dir results\public_multiome_assembly
+```
+
+固定输出：
+
+- `multiome_assembly_overview.png`
+- `multiome_assembly_report.md`
+- `multiome_assembly_summary.csv`
+
 ## 文档
 
 - `docs/software_interface.md`: 用户输入、运行方式和输出解释

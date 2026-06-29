@@ -337,6 +337,30 @@ reference model v2 还新增了：
 
 ### 7.1 Benchmark readiness 输出
 
+如果 RNA 和 ATAC 是分开的矩阵，先组装：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli assemble-multiome `
+  --rna-input path\to\rna_matrix `
+  --rna-format 10x_mtx `
+  --atac-input path\to\atac_matrix `
+  --atac-format 10x_mtx `
+  --metadata-csv metadata_with_ko.csv `
+  --cell-id-col cell_id `
+  --ko-col ko_target `
+  --max-atac-features 500 `
+  --output-h5ad data\public_multiome_perturbation.h5ad `
+  --out-dir results\public_multiome_assembly
+```
+
+输出：
+
+| 文件 | 作用 |
+|---|---|
+| `multiome_assembly_summary.csv` | RNA/ATAC 共享细胞数、特征数和 KO 标签数 |
+| `multiome_assembly_overview.png` | 直观显示 RNA/ATAC 模态和 KO 标签分布 |
+| `multiome_assembly_report.md` | 说明组装结果和下一步命令 |
+
 在正式运行多模态 benchmark 前，推荐先运行：
 
 ```powershell

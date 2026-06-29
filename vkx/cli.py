@@ -9,6 +9,7 @@ from .benchmark import validate_multimodal_benchmark
 from .core import run_virtual_ko
 from .importers import import_single_cell_data, write_import_outputs
 from .interaction import run_double_interaction
+from .multiome import assemble_multiome_benchmark
 from .preprocess import csv_matrix_to_state_table, h5ad_to_state_scores, h5ad_to_state_table, parse_extra_obsm_specs
 from .reference import apply_reference_model, inspect_reference_model, train_reference_model
 from .visualization import make_all_plots
@@ -97,6 +98,28 @@ def run_validate_benchmark(args: argparse.Namespace) -> None:
     print(f"  overview figure: {args.out_dir}\\benchmark_overview.png")
     print(f"  modality figure: {args.out_dir}\\benchmark_modalities.png")
     print(f"  report: {args.out_dir}\\benchmark_readiness_report.md")
+
+
+def run_assemble_multiome(args: argparse.Namespace) -> None:
+    adata = assemble_multiome_benchmark(
+        rna_input=args.rna_input,
+        rna_format=args.rna_format,
+        atac_input=args.atac_input,
+        atac_format=args.atac_format,
+        metadata_csv=args.metadata_csv,
+        output_h5ad=args.output_h5ad,
+        out_dir=args.out_dir,
+        cell_id_col=args.cell_id_col,
+        ko_col=args.ko_col,
+        max_atac_features=args.max_atac_features,
+    )
+    print("Assembled RNA+ATAC perturbation benchmark:")
+    print(f"  h5ad: {args.output_h5ad}")
+    print(f"  overview figure: {args.out_dir}\\multiome_assembly_overview.png")
+    print(f"  report: {args.out_dir}\\multiome_assembly_report.md")
+    print(f"  shared cells: {adata.n_obs}")
+    print(f"  RNA features: {adata.n_vars}")
+    print(f"  ATAC features: {adata.obsm['atac'].shape[1] if 'atac' in adata.obsm else 0}")
 
 
 def run_from_raw(args: argparse.Namespace) -> None:
@@ -294,6 +317,18 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--extra-obsm", default=None, help="Comma-separated modality specs to check, e.g. protein:protein,atac:atac,chromvar:tf,peak:peak.")
     bench.add_argument("--out-dir", default="results/benchmark_readiness")
     bench.set_defaults(func=run_validate_benchmark)
+    multiome = sub.add_parser("assemble-multiome", help="Assemble RNA and ATAC matrices plus KO metadata into one benchmark-ready h5ad.")
+    multiome.add_argument("--rna-input", required=True)
+    multiome.add_argument("--rna-format", required=True, choices=["h5ad", "10x_mtx", "10x_h5"])
+    multiome.add_argument("--atac-input", required=True)
+    multiome.add_argument("--atac-format", required=True, choices=["h5ad", "10x_mtx", "10x_h5"])
+    multiome.add_argument("--metadata-csv", required=True)
+    multiome.add_argument("--cell-id-col", default="cell_id")
+    multiome.add_argument("--ko-col", default="ko_target")
+    multiome.add_argument("--max-atac-features", type=int, default=500)
+    multiome.add_argument("--output-h5ad", required=True)
+    multiome.add_argument("--out-dir", default="results/multiome_assembly")
+    multiome.set_defaults(func=run_assemble_multiome)
     fit = sub.add_parser("fit", help="Fit/evaluate virtual KO from a state-score CSV table.")
     fit.add_argument("--state-csv", required=True, help="CSV with one row per cell, one KO label column, and numeric state-score columns.")
     fit.add_argument("--ko-col", default="ko_target", help="Column containing control/KO labels.")
