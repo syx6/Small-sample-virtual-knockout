@@ -80,6 +80,26 @@ results/software_interface_raw_papalexi
 
 这个命令默认展示“虚拟敲除一个基因”的使用方式。评估多个 KO 时才需要写成逗号分隔，例如 `STAT1,JAK2`。
 
+## 模型学过多少 KO？没学过的基因怎么预测？
+
+当前原型接入过多个真实 perturbation 数据集，包括 Papalexi、Norman、HMPCITE、Liscovitch ATAC、Datlinger 和 Dixit。合并看，本地实验覆盖了百级别扰动基因，大约 129 个基因名。
+
+但这个数字不等于“某一个模型已经一次性学过 129 个基因”。每次训练通常发生在一个具体 reference 数据集里，例如用 Papalexi 的部分单基因 KO 学方向，再预测留出的 KO；或用 Norman 的单基因 KO 预测双基因组合。
+
+对于训练中没见过的基因，模型不会使用 one-hot 记忆，而是构建系统先验表示：
+
+```text
+target gene
+-> Reactome/MSigDB pathway
+-> TF-target network
+-> PPI neighborhood
+-> motif / chromVAR / ATAC prior
+-> KO prior vector
+-> predicted KO delta
+```
+
+因此 unseen gene prediction 本质上是基于生物网络先验的 zero-shot / few-shot 外推。它适合做候选筛选和方向判断；如果目标基因缺少 pathway、TF-target、PPI 或 motif 先验覆盖，软件应该把结果标记为低置信度。
+
 ## 普通 10X 单细胞数据
 
 如果用户手里只是普通 10X scRNA-seq，没有 KO/perturbation 标签，可以先运行：

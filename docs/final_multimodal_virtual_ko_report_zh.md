@@ -39,6 +39,83 @@
 - 网络先验可以把 KO gene 与 Reactome/MSigDB/TF-target/PPI/motif 关系连接起来。
 - residual baseline 可以作为后续 VAE、flow matching、diffusion 的 hard constraint，而不是 soft guidance。
 
+### 3.1 当前模型学过多少 KO
+
+当前原型接入过多个真实 perturbation 数据集，但这不等于一个模型一次性学过全基因组 KO。更准确的说法是：
+
+```text
+本地实验已经接入百级别扰动基因覆盖；
+每一次 reference model 训练只在具体数据集和具体状态空间中学习 KO direction。
+```
+
+当前已接入的数据覆盖：
+
+| 数据集 | 模态 | 真实扰动标签 |
+|---|---|---:|
+| Papalexi ECCITE-seq | RNA + ADT protein | 25 个单基因 KO |
+| Norman Perturb-seq | RNA | 25 个单基因 KO + 52 个双基因 KO |
+| HMPCITE-seq | RNA + ADT + guide-derived labels | 11 个基因组成的 66 个单敲/双敲条件 |
+| Liscovitch ATAC / scPerturb | ATAC gene activity + chromVAR + peak features | 21 个单基因 KO |
+| Datlinger CRISPR | RNA | 约 20 个基因，40 个 guide/扰动标签 |
+| Dixit TF perturbation | RNA | 10 个 TF KO |
+
+合并看，当前接入过大约 129 个基因名。由于不同数据集存在物种、大小写、命名和状态空间差异，这个数字应理解为“数据覆盖范围”，不是一个统一全基因组预训练模型的训练基因数。
+
+### 3.2 没学过的基因怎么预测
+
+对训练集中没出现过的基因，模型不会用 one-hot 记忆，而是构建系统先验向量：
+
+```text
+target gene
+-> Reactome/MSigDB pathway membership
+-> TF-target relationship
+-> PPI neighborhood
+-> motif / chromVAR / ATAC regulatory relationship
+-> KO prior vector
+```
+
+模型从已见 KO 中学习：
+
+```text
+KO prior vector -> pathway / protein / ATAC state delta
+```
+
+所以未见基因的虚拟敲除过程是：
+
+```text
+unseen gene 的网络位置
+-> predicted KO delta
+-> control cell + predicted KO delta
+-> virtual KO cell
+```
+
+这属于基于系统先验的 zero-shot / few-shot 外推。它适合候选筛选和方向判断，但必须标记置信度。
+
+### 3.3 未见基因预测的置信度边界
+
+相对可信：
+
+- 基因出现在 Reactome/MSigDB/TF-target/PPI/motif 先验里。
+- 与训练过的 KO 基因处于相似 pathway 或 network module。
+- 当前细胞类型中该基因或相关通路有表达/活性。
+- 多模态信号一致，例如 RNA、protein、ATAC 支持同一方向。
+
+需要谨慎：
+
+- 基因没有真实 KO 训练样本。
+- 先验网络覆盖很弱。
+- 当前细胞类型中表达很低或调控机制未知。
+- 双敲组合中两个基因都没见过。
+- KO 效应主要来自现有先验没有覆盖的机制。
+
+因此，对外描述时不能说“模型已经学会所有未见基因 KO”。更准确的说法是：
+
+```text
+模型支持对未见基因做网络先验驱动的虚拟敲除外推；
+结果适合做候选优先级排序；
+缺少先验覆盖或相似训练 KO 时，应输出低置信度。
+```
+
 ## 4. 输入和输出到底是什么
 
 ### 4.1 用户输入

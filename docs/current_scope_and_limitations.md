@@ -22,11 +22,139 @@
 
 所以当前方法不是“已经能处理所有普通 10X 并自动给出真实准确率”的最终软件，而是一个小样本、强约束、可解释的虚拟 KO 框架原型。
 
-## 2. 当前输入到底有没有多模态
+## 2. 当前模型学过多少 KO，没学过的基因怎么预测
+
+这里必须区分两个概念：
+
+```text
+接入过的真实扰动数据覆盖范围
+≠
+某一次模型训练实际学过的 KO 基因数
+```
+
+当前本地接入和整理过的 perturbation 数据大致如下：
+
+| 数据集 | 模态 | 真实扰动标签 |
+|---|---|---:|
+| Papalexi ECCITE-seq | RNA + ADT protein | 25 个单基因 KO |
+| Norman Perturb-seq | RNA | 25 个单基因 KO + 52 个双基因 KO |
+| HMPCITE-seq | RNA + ADT + guide-derived labels | 11 个基因组成的 66 个单敲/双敲条件 |
+| Liscovitch ATAC / scPerturb | ATAC gene activity + chromVAR + peak features | 21 个单基因 KO |
+| Datlinger CRISPR | RNA | 约 20 个基因，40 个 guide/扰动标签 |
+| Dixit TF perturbation | RNA | 10 个 TF KO |
+
+把这些数据集合并看，当前接入过的是百级别 KO/perturbation gene 覆盖，大约 129 个基因名。这个数字只是“已经接入过的数据覆盖范围”，不是说某一个最终模型已经在一次训练里学遍了 129 个基因。不同数据集的物种、命名大小写、状态空间和模态不同，不能简单粗暴地当作同一个全基因组预训练模型。
+
+### 2.1 单次训练实际学什么
+
+一次模型训练通常发生在一个具体 reference 数据集里。例如：
+
+```text
+Papalexi:
+  用部分真实单基因 KO 学 KO direction
+  再预测留出的 STAT1/JAK2/IFNGR2/IRF1 等 KO
+
+Norman:
+  用单基因 KO 学方向
+  再预测双基因 KO，或评估 seen/unseen gene pair
+
+HMPCITE:
+  用 RNA + ADT + GDO 标签评估真实多模态 double-KO
+
+ATAC:
+  用 gene activity / chromVAR / peak features 测试 regulatory-state KO prediction
+```
+
+因此当前方法不是“记住所有基因的 KO 效果”，而是学习：
+
+```text
+KO gene 的系统先验特征
+-> KO 后 pathway / protein / ATAC 状态变化方向
+```
+
+### 2.2 没学过的基因如何预测
+
+如果目标基因在训练 KO 中没出现过，模型会把它转成系统先验向量：
+
+```text
+target gene
+-> Reactome/MSigDB pathway membership
+-> TF-target network membership
+-> PPI network neighborhood
+-> motif / chromVAR / ATAC regulatory prior
+-> KO prior vector
+```
+
+模型已经从训练 KO 学过：
+
+```text
+KO prior vector -> state delta
+```
+
+所以未见基因的虚拟 KO 是：
+
+```text
+unseen gene 的网络位置
+-> 预测它可能影响哪些 pathway/protein/regulatory state
+-> 得到 predicted KO delta
+-> control cell + predicted KO delta
+-> virtual KO cell
+```
+
+这属于 prior-based zero-shot / few-shot 外推。它不是凭空预测，而是借助已知生物网络和已见 KO 的响应模式。
+
+### 2.3 未见基因什么时候可信，什么时候不可信
+
+相对可信的情况：
+
+```text
+目标基因出现在 Reactome/MSigDB/TF-target/PPI/motif 先验中
+目标基因与训练过的 KO 基因处在相似 pathway 或 network module
+当前细胞类型中该基因或其下游通路有表达/活性
+多模态信息提供了一致信号，例如 RNA + protein 或 RNA + ATAC 都支持同一方向
+```
+
+风险较高的情况：
+
+```text
+目标基因没有真实 KO 训练样本
+目标基因在系统先验中覆盖很弱
+目标基因在该细胞类型中表达很低或调控关系未知
+KO 效应主要来自当前先验没有覆盖的机制
+双基因 KO 里两个基因都没见过，且没有相似组合可参考
+```
+
+因此对 unseen gene 应该输出置信度提示。更准确的对外说法是：
+
+```text
+模型可以对未见基因做基于系统先验的外推，
+适合候选筛选和方向判断；
+但如果目标基因缺少先验覆盖或训练相似性，
+结果应标记为低置信度，不能当作已验证准确预测。
+```
+
+### 2.4 seen gene / unseen gene 的定义
+
+| 术语 | 含义 |
+|---|---|
+| seen gene | 该基因在训练集中出现过真实单基因扰动 |
+| unseen gene | 该基因没有出现在训练单基因扰动里，只能靠系统先验外推 |
+| seen combo | 双敲组合中的两个基因都有单基因训练信息 |
+| unseen combo | 双敲组合中至少一个基因没有单基因训练信息 |
+
+双敲预测可以分三类看：
+
+| 双敲类型 | 可靠性 |
+|---|---|
+| 两个基因都 seen | 相对最可靠 |
+| 一个 seen、一个 unseen | 中等，取决于 unseen gene 的先验覆盖 |
+| 两个基因都 unseen | 风险较高，只适合初筛 |
+
+## 3. 当前输入到底有没有多模态
 
 有，但要分清楚“实际示例”和“接口能力”。
 
-### 2.1 已经实际跑通的多模态
+### 3.1 已经实际跑通的多模态
 
 Papalexi ECCITE-seq 示例是多模态输入：
 
@@ -55,7 +183,7 @@ results/software_interface_single_gene_demo
 results/software_interface_raw_papalexi
 ```
 
-### 2.2 当前主要结果里哪些是 RNA-only
+### 3.2 当前主要结果里哪些是 RNA-only
 
 下面这些主要是 RNA 或 RNA-derived program：
 
@@ -65,7 +193,7 @@ results/software_interface_raw_papalexi
 
 所以现在的结果并不是全都多模态。真正多模态的主要是 Papalexi RNA + ADT protein。
 
-### 2.3 ATAC / multiome 目前是什么状态
+### 3.3 ATAC / multiome 目前是什么状态
 
 接口层面预留了 ATAC/gene activity 输入，但还没有完成一个正式 multiome 示例。
 
@@ -77,7 +205,7 @@ RNA-only: 已经实际跑通
 ATAC/multiome: 接口预留，仍需要真实数据示例验证
 ```
 
-## 3. 普通 10X 没有 KO 标签时支持到什么程度
+## 4. 普通 10X 没有 KO 标签时支持到什么程度
 
 普通 10X 无 KO 标签时，目前支持的是“状态转换”，不是完整评估。
 
@@ -116,11 +244,11 @@ derived_state_manifest.csv
 
 原因很简单：没有真实 KO 细胞，就没有 ground truth。
 
-## 4. 普通 10X 怎么真正用于虚拟 KO
+## 5. 普通 10X 怎么真正用于虚拟 KO
 
 合理路线应该是两步：
 
-### 4.1 先从 perturbation/reference 数据训练 KO 方向
+### 5.1 先从 perturbation/reference 数据训练 KO 方向
 
 例如：
 
@@ -129,7 +257,7 @@ Papalexi / Norman / Datlinger / Dixit / 其他 CRISPR perturbation 数据
 -> 学到 KO gene -> pathway/program delta
 ```
 
-### 4.2 再把这个 KO delta 应用到普通 10X 细胞
+### 5.2 再把这个 KO delta 应用到普通 10X 细胞
 
 ```text
 普通 10X control-like cells
@@ -160,7 +288,7 @@ results/reference_apply_stat1_demo
 - reference model 版本记录
 - 不同数据集之间的 feature scaling / batch 校正
 
-## 5. 双敲非线性效应
+## 6. 双敲非线性效应
 
 双敲已经有了新的 interaction residual 优化，但还没有完全产品化到主接口。
 
@@ -201,7 +329,7 @@ results/reference_apply_stat1_demo
 下一步是把它集成进主 CLI/reference model，并做跨数据验证。
 ```
 
-## 6. MAPK_TGFB 为什么困难
+## 7. MAPK_TGFB 为什么困难
 
 Norman 双敲整体评估中，`MAPK_TGFB` 表现不稳定：
 
@@ -226,7 +354,7 @@ Norman 双敲整体评估中，`MAPK_TGFB` 表现不稳定：
 
 下一步需要的是“受约束的交互模型”，不是直接让 diffusion/VAE 自由生成。
 
-## 7. 当前生成模型定位
+## 8. 当前生成模型定位
 
 当前最终采用的是：
 
@@ -262,7 +390,7 @@ hard-constrained residual / PLS baseline
 - 细胞亚群比例变化模拟不足。
 - 对强非线性双敲仍然不够。
 
-## 8. AUC 怎么解释
+## 9. AUC 怎么解释
 
 AUC 是有用的，但要谨慎。
 
@@ -292,7 +420,7 @@ AUC = 1.000
 
 不能解释成大规模泛化能力已经完美。
 
-## 9. 当前应该怎么对外描述
+## 10. 当前应该怎么对外描述
 
 比较准确的说法：
 
@@ -312,7 +440,7 @@ AUC = 1.000
 AUC 高就说明模型全面准确。
 ```
 
-## 10. 下一步最应该做什么
+## 11. 下一步最应该做什么
 
 优先级建议：
 
