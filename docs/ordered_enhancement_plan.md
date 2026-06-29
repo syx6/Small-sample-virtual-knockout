@@ -179,9 +179,11 @@ results/scperturb_atac_regulatory_peak_prior_kdm6a/05_atac_peak_level_changes.pn
 结果：
 
 ```text
-KDM6A regulatory peak prior:
+KDM6A regulatory peak prior + shape calibration:
 ROC-AUC = 0.674
 direction cosine = 0.771
+distribution improvement = -0.059
+improved fraction = 0.513
 ```
 
 下一步继续增强：

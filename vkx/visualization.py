@@ -80,6 +80,7 @@ def plot_summary(summary: pd.DataFrame, out_dir: Path) -> None:
         f"KO targets: {int(row['n_ko'])}\n"
         f"Features: {int(row['n_features'])}\n"
         f"Calibration: {row.get('calibration_method', 'none')}\n\n"
+        f"Shape calibration: {row.get('shape_calibration_method', 'none')}\n\n"
         f"Verdict: {verdict}"
     )
     axes[1].text(0.02, 0.92, text, va="top", fontsize=11, linespacing=1.35, transform=axes[1].transAxes)
@@ -345,6 +346,7 @@ def write_report(summary: pd.DataFrame, auc_summary: pd.DataFrame, out_dir: Path
 - Mean magnitude error: {row.get('mean_abs_delta_error', np.nan):.3f}
 - Strong-response ROC-AUC: {auc_text}
 - Calibration method: {row.get('calibration_method', 'none')}
+- Shape calibration method: {row.get('shape_calibration_method', 'none')}
 
 ## How to read the figures
 

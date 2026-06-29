@@ -191,6 +191,25 @@ def calibration_factors(loo_pred: np.ndarray, truth: np.ndarray, mode: str) -> t
     return candidates[best], best
 
 
+def shape_factors(frame: pd.DataFrame, ko_col: str, features: list[str], holdouts: set[str], mode: str) -> np.ndarray:
+    if mode == "none":
+        return np.ones(len(features), dtype=float)
+    ctrl = frame.loc[control_mask(frame[ko_col]), features].to_numpy(dtype=float)
+    ctrl_std = np.nanstd(ctrl, axis=0)
+    ctrl_std = np.where(ctrl_std < 1e-6, 1.0, ctrl_std)
+    ratios = []
+    for ko, group in frame.loc[~control_mask(frame[ko_col])].groupby(ko_col, observed=True):
+        ko = str(ko)
+        if ko in holdouts or len(group) < 3:
+            continue
+        std = np.nanstd(group[features].to_numpy(dtype=float), axis=0)
+        ratios.append(std / ctrl_std)
+    if not ratios:
+        return np.ones(len(features), dtype=float)
+    ratio = np.nanmedian(np.vstack(ratios), axis=0)
+    return np.clip(np.nan_to_num(ratio, nan=1.0, posinf=1.0, neginf=1.0), 0.45, 2.20)
+
+
 def feature_columns(frame: pd.DataFrame, ko_col: str, explicit: list[str] | None = None) -> list[str]:
     if explicit:
         return explicit
@@ -246,6 +265,7 @@ def run_virtual_ko(
     modality: str = "state score table",
     representation: str = "pathway/program scores",
     calibrate: str = "auto",
+    shape_calibrate: str = "none",
     max_cells_per_state: int = 180,
     seed: int = 7,
 ) -> VirtualKOResult:
@@ -258,8 +278,10 @@ def run_virtual_ko(
     model = fit_pls(train_labels, train_delta, terms)
     loo_pred = loo_training_predictions(train_labels, train_delta, terms)
     alpha, calibration_method = calibration_factors(loo_pred, train_delta, calibrate)
+    shape_alpha = shape_factors(frame, ko_col, features, holdout_set, shape_calibrate)
 
     control = frame.loc[control_mask(frame[ko_col]), features].to_numpy(dtype=float)
+    control_mean = np.nanmean(control, axis=0)
     metric_rows, cell_rows, delta_rows = [], [], []
     for ko in holdouts:
         true = frame.loc[frame[ko_col].astype(str) == ko, features].to_numpy(dtype=float)
@@ -267,7 +289,7 @@ def run_virtual_ko(
             continue
         ctrl = control[rng.integers(0, len(control), size=len(true))]
         pred_delta = model.predict(ko_prior_vector(ko, terms).reshape(1, -1)).reshape(-1) * alpha
-        virtual = ctrl + pred_delta.reshape(1, -1)
+        virtual = control_mean.reshape(1, -1) + (ctrl - control_mean.reshape(1, -1)) * shape_alpha.reshape(1, -1) + pred_delta.reshape(1, -1)
         true_delta = true.mean(axis=0) - ctrl.mean(axis=0)
         denom = np.linalg.norm(true_delta) * np.linalg.norm(pred_delta)
         delta_row = {
@@ -276,6 +298,7 @@ def run_virtual_ko(
             "state_representation": representation,
             "ko_target": ko,
             "calibration_method": calibration_method,
+            "shape_calibration_method": shape_calibrate,
             "direction_cosine": float(np.dot(true_delta, pred_delta) / denom) if denom > 1e-9 else np.nan,
             "mean_abs_delta_error": float(np.mean(np.abs(pred_delta - true_delta))),
             "true_delta_norm": float(np.linalg.norm(true_delta)),
@@ -328,12 +351,15 @@ def run_virtual_ko(
         summary["mean_direction_cosine"] = float(delta_table["direction_cosine"].mean())
         summary["mean_abs_delta_error"] = float(delta_table["mean_abs_delta_error"].mean())
         summary["calibration_method"] = calibration_method
+        summary["shape_calibration_method"] = shape_calibrate
     auc_points = make_auc_points(delta_table, features) if not delta_table.empty else pd.DataFrame()
     calibration = pd.DataFrame(
         {
             "feature": features,
             "alpha": alpha,
             "calibration_method": calibration_method,
+            "shape_alpha": shape_alpha,
+            "shape_calibration_method": shape_calibrate,
         }
     )
     return VirtualKOResult(metrics, summary, virtual_cells, delta_table, auc_points, calibration)

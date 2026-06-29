@@ -170,6 +170,14 @@ RNA-only 数据推荐 `--calibrate auto`，因为 RNA-only 常见问题是方向
 
 RNA + protein / multiome 数据建议先用 `--calibrate none`，因为多模态状态本身已经提供了更强约束。
 
+ATAC peak-level 数据如果出现“方向对但单细胞分布形状不好”，可以加：
+
+```powershell
+--shape-calibrate variance
+```
+
+它会从训练 KO 学习每个 feature 的方差变化比例，只拉伸/压缩虚拟细胞分布，不改变 KO 主方向。适合 sparse peak features。
+
 ## 6. 普通 10X 单细胞数据怎么支持
 
 大多数用户手里是普通 10X scRNA-seq，不一定有 perturb-seq 标签。这个场景要分清楚：

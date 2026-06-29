@@ -46,6 +46,7 @@ def run_fit(args: argparse.Namespace) -> None:
         modality=args.modality,
         representation=args.representation,
         calibrate=args.calibrate,
+        shape_calibrate=args.shape_calibrate,
         max_cells_per_state=args.max_cells_per_state,
         seed=args.seed,
     )
@@ -160,6 +161,7 @@ def run_from_raw(args: argparse.Namespace) -> None:
         modality=args.modality,
         representation=args.representation,
         calibrate=args.calibrate,
+        shape_calibrate=args.shape_calibrate,
         max_cells_per_state=args.max_cells_per_state,
         seed=args.seed,
     )
@@ -341,6 +343,7 @@ def build_parser() -> argparse.ArgumentParser:
     fit.add_argument("--modality", default="state score table")
     fit.add_argument("--representation", default="pathway/program scores")
     fit.add_argument("--calibrate", choices=["auto", "none", "global_scale", "feature_scale"], default="auto")
+    fit.add_argument("--shape-calibrate", choices=["none", "variance"], default="none", help="Optional distribution-shape calibration. Use variance for sparse ATAC/peak features.")
     fit.add_argument("--max-cells-per-state", type=int, default=180)
     fit.add_argument("--seed", type=int, default=7)
     fit.set_defaults(func=run_fit)
@@ -362,6 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
     raw.add_argument("--max-extra-features-per-obsm", type=int, default=None, help="Optional cap for each extra obsm modality, useful for large chromVAR/motif/peak matrices.")
     raw.add_argument("--extra-feature-selection", choices=["variance", "ko_effect", "hybrid"], default="variance", help="How to choose capped extra obsm features. Use hybrid for labeled ATAC/chromVAR perturbation data.")
     raw.add_argument("--calibrate", choices=["auto", "none", "global_scale", "feature_scale"], default="auto")
+    raw.add_argument("--shape-calibrate", choices=["none", "variance"], default="none", help="Optional distribution-shape calibration. Use variance for sparse ATAC/peak features.")
     raw.add_argument("--max-cells-per-state", type=int, default=180)
     raw.add_argument("--seed", type=int, default=7)
     raw.set_defaults(func=run_from_raw)

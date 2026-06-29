@@ -11,14 +11,14 @@ import seaborn as sns
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "results" / "user_facing_figures"
-PEAK_RUN = ROOT / "results" / "scperturb_atac_regulatory_peak_prior_kdm6a"
+PEAK_RUN = ROOT / "results" / "scperturb_atac_regulatory_peak_prior_shape_kdm6a"
 
 
 RUNS = [
     ("Gene activity", ROOT / "results" / "scperturb_atac_gene_activity_kdm6a"),
     ("+ all chromVAR", ROOT / "results" / "scperturb_atac_gene_activity_chromvar_kdm6a"),
     ("+ top100 chromVAR", ROOT / "results" / "scperturb_atac_gene_activity_chromvar_top100_kdm6a"),
-    ("+ regulatory scored peaks", PEAK_RUN),
+    ("+ regulatory peaks + shape", PEAK_RUN),
 ]
 
 
@@ -103,7 +103,7 @@ def main() -> None:
         "What changed?\n\n"
         "- Peak selection now combines target locus, marker peaks, KO effect, accessibility and TF/motif prior.\n"
         "- The regulatory peak model reaches AUC 0.67 and direction 0.77.\n"
-        "- Peak features improve strong-response ranking and direction matching.\n"
+        "- Variance shape calibration improves feature-level distribution hit-rate.\n"
         "- Distribution improvement is still weak, so peak-level cell distributions remain difficult.\n\n"
         "This is a real peak-level regulatory-prior view, not only gene activity or motif proxy."
     )

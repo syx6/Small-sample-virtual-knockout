@@ -99,7 +99,73 @@ results/scperturb_atac_regulatory_peak_prior_kdm6a
 - 说明强响应排序和整体方向更好。
 - 但 distribution improvement 仍为负，说明 peak-level 单细胞分布形状仍然困难。
 
-## 5. 新 peak-level 图
+## 5. 解决单细胞分布形状：variance shape calibration
+
+ATAC peak 的难点不是只有“平均方向”。很多 peak 的真实 KO 效应表现为：
+
+- 可及细胞比例变化；
+- 方差变化；
+- 分布尾部变化；
+- zero-inflated / sparse signal 的形状变化。
+
+原来的虚拟 KO 是：
+
+```text
+virtual cell = control cell + predicted delta
+```
+
+这会保留 control 的分布形状，只移动平均值。因此当真实 KO 改变 peak 分布形状时，Wasserstein distance 仍然可能很差。
+
+现在新增：
+
+```text
+--shape-calibrate variance
+```
+
+它只从训练 KO 学习每个 feature 的：
+
+```text
+KO std / control std
+```
+
+然后生成：
+
+```text
+virtual cell =
+  control mean
+  + shape_alpha * (control cell - control mean)
+  + predicted KO delta
+```
+
+这仍然是 hard-constrained：
+
+- KO 主方向仍由 residual/PLS + prior 决定；
+- shape calibration 只轻微拉伸或压缩单细胞分布；
+- 不使用 held-out KDM6A 的真实分布，因此不是结果泄漏。
+
+### Shape-calibrated KDM6A 结果
+
+新运行目录：
+
+```text
+results/scperturb_atac_regulatory_peak_prior_shape_kdm6a
+```
+
+对比：
+
+| 版本 | distribution improvement | improved fraction | direction | AUC |
+|---|---:|---:|---:|---:|
+| old peak prior | -0.159 | 0.378 | 0.684 | 0.658 |
+| regulatory peak prior | -0.176 | 0.375 | 0.771 | 0.674 |
+| regulatory peak prior + shape | -0.059 | 0.513 | 0.771 | 0.674 |
+
+解释：
+
+- regulatory peak prior 主要改善方向和强响应排序。
+- variance shape calibration 明显改善单细胞分布距离。
+- distribution improvement 仍未转正，说明 ATAC peak 形状还没有完全解决，但已经从“明显更差”变成“接近 control/true 的边界”。
+
+## 6. 新 peak-level 图
 
 默认 `run` 会输出：
 
@@ -119,13 +185,14 @@ results/scperturb_atac_regulatory_peak_prior_kdm6a/05_atac_peak_level_changes.pn
 results/user_facing_figures/19_atac_peak_level_visualization.png
 ```
 
-## 6. 结论
+## 7. 结论
 
 这次增强让 ATAC peak 选择更有调控解释性，而不是只看方差。结果说明：
 
 ```text
-peak-level prior 能改善强响应排序和方向一致性，
-但 ATAC peak 单细胞分布仍比 RNA/ADT 难预测。
+peak-level prior 能改善强响应排序和方向一致性；
+variance shape calibration 能改善单细胞分布形状；
+但 ATAC peak 分布仍比 RNA/ADT 难预测。
 ```
 
 下一步应该继续加入：
