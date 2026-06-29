@@ -1,9 +1,4 @@
-<!--
-GitHub readable version:
-- Figures are normal PNG files under docs/report_assets/.
-- Display equations are rendered as PNG files under docs/report_assets/.
-- Inline equations are converted to readable text, so this page does not depend on MathJax.
--->
+<!-- GitHub readable version: figures and equations are PNG files under docs/report_assets/. -->
 
 # 小样本多模态虚拟敲除模型完整报告
 
@@ -273,7 +268,7 @@ PLS 回归学习：
 ![Formula 19](report_assets/formula_19.png)
 
 
-为改善幅度，可用留一训练预测做 calibration。若 `hat(Delta)^LOO` 是 leave-one-out 预测，真实值为 `Delta`，全局缩放可写为：
+为改善幅度，可用留一训练预测做 calibration。若 `widehatDelta^LOO` 是 leave-one-out 预测，真实值为 `Delta`，全局缩放可写为：
 
 
 ![Formula 20](report_assets/formula_20.png)
@@ -301,7 +296,7 @@ PLS 回归学习：
 ![Formula 23](report_assets/formula_23.png)
 
 
-其中 `A_shape` 是对角 shape calibration 矩阵。
+其中 `A_textshape` 是对角 shape calibration 矩阵。
 
 #### Variance shape calibration
 
@@ -430,8 +425,8 @@ PLS 回归学习：
 ![Formula 40](report_assets/formula_40.png)
 
 
-若 `DI>0`，说明虚拟 KO 比 control 更接近真实 KO。  
-`improved fraction` 是 `DI>0` 的 feature 比例。
+若 `operatornameDI>0`，说明虚拟 KO 比 control 更接近真实 KO。  
+`improved fraction` 是 `operatornameDI>0` 的 feature 比例。
 
 ### 5.4 ROC-AUC
 
@@ -834,4 +829,3 @@ results/user_facing_figures/14_hmpcite_multimodal_doubleko_summary.png
 results/user_facing_figures/19_atac_peak_level_visualization.png
 results/figures/norman_double_interaction_model_comparison.png
 ```
-

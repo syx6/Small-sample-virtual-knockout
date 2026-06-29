@@ -891,11 +891,11 @@ Reference workflow：
 从结果看，**小样本多模态虚拟敲除思路是成立的**。关键不是“最新算法足够强所以样本可以很少”，而是：
 
 \[
-\text{多模态信息密度}
+\text{multi-modal information}
 +
-\text{系统网络先验}
+\text{system network prior}
 +
-\text{hard-constrained 小模型}
+\text{hard-constrained small model}
 \]
 
 共同降低了学习难度。
@@ -952,4 +952,3 @@ results/user_facing_figures/14_hmpcite_multimodal_doubleko_summary.png
 results/user_facing_figures/19_atac_peak_level_visualization.png
 results/figures/norman_double_interaction_model_comparison.png
 ```
-
