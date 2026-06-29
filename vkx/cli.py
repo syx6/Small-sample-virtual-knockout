@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .benchmark import validate_multimodal_benchmark
 from .core import run_virtual_ko
 from .importers import import_single_cell_data, write_import_outputs
 from .interaction import run_double_interaction
@@ -80,6 +81,22 @@ def run_import_data(args: argparse.Namespace) -> None:
     print(f"  report: {out_dir}\\import_report.md")
     print(f"  cells: {adata.n_obs}")
     print(f"  RNA features: {adata.n_vars}")
+
+
+def run_validate_benchmark(args: argparse.Namespace) -> None:
+    result = validate_multimodal_benchmark(
+        input_h5ad=args.input_h5ad,
+        ko_col=args.ko_col,
+        extra_obsm=args.extra_obsm,
+        out_dir=args.out_dir,
+    )
+    summary = result["summary"]
+    verdict = summary.loc[summary["check"] == "benchmark_mode", "status"].iloc[0]
+    print("Validated multimodal perturbation benchmark input:")
+    print(f"  verdict: {verdict}")
+    print(f"  overview figure: {args.out_dir}\\benchmark_overview.png")
+    print(f"  modality figure: {args.out_dir}\\benchmark_modalities.png")
+    print(f"  report: {args.out_dir}\\benchmark_readiness_report.md")
 
 
 def run_from_raw(args: argparse.Namespace) -> None:
@@ -271,6 +288,12 @@ def build_parser() -> argparse.ArgumentParser:
     importer.add_argument("--metadata-csv", default=None, help="Optional metadata CSV to join by cell id, e.g. KO labels or cell types.")
     importer.add_argument("--cell-id-col", default="cell_id", help="Cell id column in metadata CSV.")
     importer.set_defaults(func=run_import_data)
+    bench = sub.add_parser("validate-benchmark", help="Check whether an h5ad is ready for labelled multimodal perturbation benchmarking and make overview plots.")
+    bench.add_argument("--input-h5ad", required=True)
+    bench.add_argument("--ko-col", default="ko_target")
+    bench.add_argument("--extra-obsm", default=None, help="Comma-separated modality specs to check, e.g. protein:protein,atac:atac,chromvar:tf,peak:peak.")
+    bench.add_argument("--out-dir", default="results/benchmark_readiness")
+    bench.set_defaults(func=run_validate_benchmark)
     fit = sub.add_parser("fit", help="Fit/evaluate virtual KO from a state-score CSV table.")
     fit.add_argument("--state-csv", required=True, help="CSV with one row per cell, one KO label column, and numeric state-score columns.")
     fit.add_argument("--ko-col", default="ko_target", help="Column containing control/KO labels.")

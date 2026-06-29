@@ -83,7 +83,27 @@ import_report.md
 3. ADT/protein 放入 `adata.obsm["protein"]`。
 4. ATAC gene activity / chromVAR / peak score 放入 `adata.obsm["atac"]`、`adata.obsm["chromvar"]`、`adata.obsm["peak"]`。
 5. perturbation 标签放入 `adata.obs["ko_target"]`。
-6. 运行：
+6. 先检查 benchmark readiness：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli validate-benchmark `
+  --input-h5ad data\public_trimodal_perturbation.h5ad `
+  --ko-col ko_target `
+  --extra-obsm protein:protein,atac:atac,chromvar:tf,peak:peak `
+  --out-dir results\public_trimodal_readiness
+```
+
+固定输出：
+
+```text
+benchmark_readiness.csv
+benchmark_label_counts.csv
+benchmark_overview.png
+benchmark_modalities.png
+benchmark_readiness_report.md
+```
+
+7. 如果 readiness 是 `ok`，再运行正式 benchmark：
 
 ```powershell
 .\.venv\Scripts\python.exe -m vkx.cli run `

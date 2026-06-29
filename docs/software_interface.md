@@ -194,7 +194,70 @@ RNA + protein / multiome 数据建议先用 `--calibrate none`，因为多模态
 
 但是，如果完全没有真实 KO/perturbation 标签，软件不能在这个数据集内部评估“虚拟 KO 是否接近真实 KO”，因为没有真实 KO 作为答案。
 
-### 6.2 普通 10X 作为待预测细胞群
+### 6.2 有 KO 标签的 10X
+
+有 KO 标签的 10X 是支持的。典型文件结构是：
+
+```text
+filtered_feature_bc_matrix/
+├── matrix.mtx.gz
+├── features.tsv.gz
+└── barcodes.tsv.gz
+
+metadata.csv
+```
+
+`metadata.csv` 用 10X barcode 对齐每个细胞的 KO 标签：
+
+```csv
+cell_id,ko_target,cell_type,batch
+AAACCCAAGAAACACT-1,control,T_cell,batch1
+AAACCCAAGAAACCAT-1,STAT1,T_cell,batch1
+AAACCCAAGAAAGTGG-1,JAK2,Mono,batch2
+AAACCCAAGAAATCCA-1,STAT1+JAK2,Mono,batch2
+```
+
+关键列：
+
+| 列名 | 作用 |
+|---|---|
+| `cell_id` | 10X barcode，必须能和 `barcodes.tsv.gz` 对齐 |
+| `ko_target` | 每个细胞的扰动标签，例如 `control`、`STAT1`、`STAT1+JAK2` |
+| `cell_type` | 可选，用于 cell type 分层输出 |
+| `batch` | 可选，用于后续 batch covariate 分析 |
+
+导入：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli import-data `
+  --input path\to\filtered_feature_bc_matrix `
+  --format 10x_mtx `
+  --metadata-csv metadata.csv `
+  --cell-id-col cell_id `
+  --out-dir results\import_10x_ko
+```
+
+评估真实 KO：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli run `
+  --input-h5ad results\import_10x_ko\imported_data.h5ad `
+  --ko-col ko_target `
+  --target-kos STAT1,JAK2,STAT1+JAK2 `
+  --prior-dir data\priors `
+  --out-dir results\tenx_ko_virtual_eval
+```
+
+如果 `ko_target` 里有 control 和真实 KO 标签，这就是 evaluation 模式，可以报告：
+
+- true vs virtual heatmap
+- UMAP
+- ROC/AUC 曲线
+- distribution improvement
+- direction cosine
+- MAE/R2 等误差指标
+
+### 6.3 普通 10X 作为待预测细胞群
 
 这是合理应用场景：
 
@@ -271,6 +334,31 @@ reference model v2 还新增了：
 注意：`apply-reference` 是 prediction-only 模式。如果输入数据没有真实 KO 标签，不会输出 AUC、distribution improvement 或 true-vs-virtual heatmap。
 
 ## 7. 输出文件
+
+### 7.1 Benchmark readiness 输出
+
+在正式运行多模态 benchmark 前，推荐先运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli validate-benchmark `
+  --input-h5ad your_multimodal_perturbation.h5ad `
+  --ko-col ko_target `
+  --extra-obsm protein:protein,atac:atac,chromvar:tf,peak:peak `
+  --out-dir results\benchmark_readiness
+```
+
+输出：
+
+| 文件 | 作用 |
+|---|---|
+| `benchmark_readiness.csv` | 检查细胞数、RNA features、KO 标签、control、extra modality 是否存在 |
+| `benchmark_label_counts.csv` | 每个 KO/perturbation 标签有多少细胞 |
+| `benchmark_overview.png` | 一页图显示 benchmark 是否合格和主要 KO 标签 |
+| `benchmark_modalities.png` | 显示 RNA/protein/ATAC/chromVAR/peak 等模态特征数 |
+| `benchmark_readiness_report.md` | 自动解释这个数据是否适合作为真实 benchmark |
+
+如果 readiness 是 `ok`，说明它有真实 KO 标签和至少一种额外模态，可以继续跑 `run` 并解释 AUC/heatmap/UMAP。  
+如果是 `partial`，说明可以运行部分功能，但不能宣传成完整多模态 perturbation benchmark。
 
 运行后会生成：
 

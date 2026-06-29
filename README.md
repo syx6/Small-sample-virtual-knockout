@@ -147,6 +147,63 @@ target gene
 
 注意：没有真实 KO 标签时，软件可以准备细胞状态并用于后续虚拟 KO 应用，但不能计算真实 KO 对照、AUC、UMAP 改善等评估指标。要评估“好不好”，必须有 perturb-seq / CRISPR / 药物扰动等真实 perturbation 标签。
 
+## 有 KO 标签的 10X 数据长什么样？
+
+支持。有 KO 标签的 10X 数据通常由两部分组成：
+
+```text
+filtered_feature_bc_matrix/
+├── matrix.mtx.gz
+├── features.tsv.gz
+└── barcodes.tsv.gz
+
+metadata.csv
+```
+
+`metadata.csv` 至少需要两列：
+
+```csv
+cell_id,ko_target
+AAACCCAAGAAACACT-1,control
+AAACCCAAGAAACCAT-1,STAT1
+AAACCCAAGAAAGTGG-1,JAK2
+AAACCCAAGAAATCCA-1,STAT1+JAK2
+```
+
+也可以包含 cell type 和 batch：
+
+```csv
+cell_id,ko_target,cell_type,batch
+AAACCCAAGAAACACT-1,control,T_cell,batch1
+AAACCCAAGAAACCAT-1,STAT1,T_cell,batch1
+AAACCCAAGAAAGTGG-1,JAK2,Mono,batch2
+AAACCCAAGAAATCCA-1,STAT1+JAK2,Mono,batch2
+```
+
+先导入：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli import-data `
+  --input path\to\filtered_feature_bc_matrix `
+  --format 10x_mtx `
+  --metadata-csv metadata.csv `
+  --cell-id-col cell_id `
+  --out-dir results\import_10x_ko
+```
+
+再做真实 KO 评估：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli run `
+  --input-h5ad results\import_10x_ko\imported_data.h5ad `
+  --ko-col ko_target `
+  --target-kos STAT1,JAK2,STAT1+JAK2 `
+  --prior-dir data\priors `
+  --out-dir results\tenx_ko_virtual_eval
+```
+
+只要 `ko_target` 里同时有 `control` 和真实 KO 标签，就可以输出真实 vs 虚拟 heatmap、UMAP、ROC/AUC 和 summary dashboard。
+
 ## Reference model 应用到普通 10X
 
 从 perturbation 数据训练 reference KO 模型：
@@ -212,6 +269,28 @@ results/reference_apply_stat1_demo
 - improved fraction: `0.759`
 - mean direction cosine: `0.679`
 - strong-response ROC-AUC: `0.802`
+
+## 检查多模态 perturbation benchmark 是否合格
+
+拿到 RNA+ADT、RNA+ATAC 或 RNA+ADT+ATAC 且带 perturbation 标签的 h5ad 后，可以先检查它是否适合做真实 benchmark：
+
+```powershell
+.\.venv\Scripts\python.exe -m vkx.cli validate-benchmark `
+  --input-h5ad your_multimodal_perturbation.h5ad `
+  --ko-col ko_target `
+  --extra-obsm protein:protein,atac:atac,chromvar:tf,peak:peak `
+  --out-dir results\benchmark_readiness
+```
+
+固定输出：
+
+- `benchmark_readiness.csv`
+- `benchmark_label_counts.csv`
+- `benchmark_overview.png`
+- `benchmark_modalities.png`
+- `benchmark_readiness_report.md`
+
+这一步会告诉用户：有没有 KO 标签、有没有 control、每个 KO 有多少细胞、检测到哪些模态，以及这个数据能不能作为真实准确性 benchmark。
 
 ## 文档
 
