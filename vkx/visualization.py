@@ -268,7 +268,7 @@ def plot_peak_level_changes(delta_table: pd.DataFrame, out_dir: Path, max_peaks:
     )
     long["change"] = long["change"].map({"true_delta": "Real KO", "virtual_delta": "Virtual KO"})
 
-    fig, axes = plt.subplots(1, 2, figsize=(13.5, max(5.0, 0.42 * len(plot) + 2.2)), constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(17.5, max(5.0, 0.42 * len(plot) + 2.2)), constrained_layout=True)
     sns.barplot(data=long, x="label", y="delta", hue="change", palette=["#2A9D8F", "#E76F51"], ax=axes[0])
     axes[0].axhline(0, color="#444", ls="--", lw=1)
     axes[0].set_title("ATAC peak changes: real vs virtual KO")
@@ -294,6 +294,30 @@ def plot_peak_level_changes(delta_table: pd.DataFrame, out_dir: Path, max_peaks:
     axes[1].set_title("Peak-level error heatmap")
     axes[1].set_xlabel("")
     axes[1].set_ylabel("")
+
+    scatter = plot.copy()
+    sns.scatterplot(
+        data=scatter,
+        x="true_delta",
+        y="virtual_delta",
+        hue="peak_type",
+        size="score",
+        sizes=(50, 180),
+        palette="tab10",
+        ax=axes[2],
+    )
+    lim = np.nanmax(np.abs(scatter[["true_delta", "virtual_delta"]].to_numpy()))
+    if not np.isfinite(lim) or lim < 1e-6:
+        lim = 1.0
+    axes[2].plot([-lim, lim], [-lim, lim], color="0.35", linestyle="--", linewidth=1)
+    axes[2].axhline(0, color="0.75", linewidth=0.8)
+    axes[2].axvline(0, color="0.75", linewidth=0.8)
+    axes[2].set_xlim(-lim * 1.1, lim * 1.1)
+    axes[2].set_ylim(-lim * 1.1, lim * 1.1)
+    axes[2].set_title("Peak direction agreement")
+    axes[2].set_xlabel("Real KO peak delta")
+    axes[2].set_ylabel("Virtual KO peak delta")
+    axes[2].legend(title="Peak type", fontsize=8, title_fontsize=9, loc="best")
     fig.savefig(out_dir / "05_atac_peak_level_changes.png", bbox_inches="tight", dpi=300)
     plt.close(fig)
 

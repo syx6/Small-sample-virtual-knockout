@@ -159,18 +159,37 @@ benchmark_readiness_report.md
 
 ## 3. ATAC peak-level 调控先验继续增强
 
-当前已有：
+当前 v2 已完成：
 
 - `peak:peak` obsm 输入
 - locus-aware peak selection
 - `05_atac_peak_level_changes.png`
 - motif/TF-target weighted prior
+- target locus + marker peak + KO effect + accessibility + motif/TF prior 综合打分
+- `selection_reason` 和 peak regulatory score 输出
 
-下一步增强：
+新增输出：
 
-- peak 按 target gene locus、TF motif、markerpeak_target、KO effect 共同打分。
-- 输出每个 peak 的 locus 类型：promoter、intronic、distal、global variable。
-- peak 图固定展示真实 KO、虚拟 KO、误差和单细胞分布。
+```text
+data/scperturb_atac/liscovitch_k562_selected_peak_metadata.csv
+data/scperturb_atac/liscovitch_k562_peak_regulatory_prior_scores_top1000.csv
+results/scperturb_atac_regulatory_peak_prior_kdm6a/05_atac_peak_level_changes.png
+```
+
+结果：
+
+```text
+KDM6A regulatory peak prior:
+ROC-AUC = 0.674
+direction cosine = 0.771
+```
+
+下一步继续增强：
+
+- motif-to-peak annotation。
+- promoter/enhancer 更精细分类。
+- peak-gene linkage。
+- batch-aware peak normalization。
 
 ## 4. 多基因 KO 组合效应主接口集成
 

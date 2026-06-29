@@ -319,6 +319,7 @@ results/reference_apply_stat1_demo
 - `docs/software_interface.md`: 用户输入、运行方式和输出解释
 - `docs/reference_model_workflow_v2.md`: reference model v2、批量 KO、cell type 分层、prediction-only 10X/multiome 报告
 - `docs/ordered_enhancement_plan.md`: 按顺序增强 Seurat/10x、多模态 benchmark、ATAC peak、多基因 KO 和 batch covariate
+- `docs/atac_peak_regulatory_prior_v2.md`: ATAC peak-level 调控先验 v2 和 KDM6A 结果
 - `docs/single_double_knockout_results.md`: 单基因敲除和双基因敲除结果整理
 - `docs/current_scope_and_limitations.md`: 当前支持范围和限制说明
 - `docs/virtual_knockout_method_background.md`: 虚拟敲除背景、主流方法和当前方法选择

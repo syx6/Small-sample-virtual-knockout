@@ -11,14 +11,14 @@ import seaborn as sns
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "results" / "user_facing_figures"
-PEAK_RUN = ROOT / "results" / "scperturb_atac_weighted_hybrid_peak_kdm6a"
+PEAK_RUN = ROOT / "results" / "scperturb_atac_regulatory_peak_prior_kdm6a"
 
 
 RUNS = [
     ("Gene activity", ROOT / "results" / "scperturb_atac_gene_activity_kdm6a"),
     ("+ all chromVAR", ROOT / "results" / "scperturb_atac_gene_activity_chromvar_kdm6a"),
     ("+ top100 chromVAR", ROOT / "results" / "scperturb_atac_gene_activity_chromvar_top100_kdm6a"),
-    ("+ weighted locus peaks", PEAK_RUN),
+    ("+ regulatory scored peaks", PEAK_RUN),
 ]
 
 
@@ -101,11 +101,11 @@ def main() -> None:
     ax.set_axis_off()
     text = (
         "What changed?\n\n"
-        "- Peak-level features are now part of the model state.\n"
-        "- The optimized peak model reaches AUC 0.66 and direction 0.68.\n"
-        "- Peak features improve strong-response ranking.\n"
+        "- Peak selection now combines target locus, marker peaks, KO effect, accessibility and TF/motif prior.\n"
+        "- The regulatory peak model reaches AUC 0.67 and direction 0.77.\n"
+        "- Peak features improve strong-response ranking and direction matching.\n"
         "- Distribution improvement is still weak, so peak-level cell distributions remain difficult.\n\n"
-        "This is a real peak-level view, not only gene activity or motif proxy."
+        "This is a real peak-level regulatory-prior view, not only gene activity or motif proxy."
     )
     ax.text(0.02, 0.96, text, va="top", fontsize=10.5, linespacing=1.3)
 
