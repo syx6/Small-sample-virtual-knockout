@@ -10,6 +10,7 @@ from .core import run_virtual_ko
 from .importers import import_single_cell_data, write_import_outputs
 from .interaction import run_double_interaction
 from .multiome import assemble_multiome_benchmark
+from .peak_annotation import annotate_peaks
 from .preprocess import csv_matrix_to_state_table, h5ad_to_state_scores, h5ad_to_state_table, parse_extra_obsm_specs
 from .reference import apply_reference_model, inspect_reference_model, train_reference_model
 from .visualization import make_all_plots
@@ -121,6 +122,25 @@ def run_assemble_multiome(args: argparse.Namespace) -> None:
     print(f"  shared cells: {adata.n_obs}")
     print(f"  RNA features: {adata.n_vars}")
     print(f"  ATAC features: {adata.obsm['atac'].shape[1] if 'atac' in adata.obsm else 0}")
+
+
+def run_annotate_peaks(args: argparse.Namespace) -> None:
+    table = annotate_peaks(
+        input_h5ad=args.input_h5ad,
+        obsm_key=args.obsm_key,
+        out_csv=args.out_csv,
+        feature_names_csv=args.feature_names_csv,
+        gene_tss_csv=args.gene_tss_csv,
+        motif_hits_csv=args.motif_hits_csv,
+        marker_peaks_csv=args.marker_peaks_csv,
+        target_genes=args.target_genes,
+        max_distance=args.max_distance,
+    )
+    print("Annotated ATAC peak features:")
+    print(f"  annotation CSV: {args.out_csv}")
+    print(f"  report: {Path(args.out_csv).with_suffix('.report.md')}")
+    print(f"  features: {len(table)}")
+    print(f"  nonzero regulatory prior: {(table['regulatory_prior_score'] > 0).sum()}")
 
 
 def run_from_raw(args: argparse.Namespace) -> None:
@@ -342,6 +362,17 @@ def build_parser() -> argparse.ArgumentParser:
     multiome.add_argument("--output-h5ad", required=True)
     multiome.add_argument("--out-dir", default="results/multiome_assembly")
     multiome.set_defaults(func=run_assemble_multiome)
+    annotate = sub.add_parser("annotate-peaks", help="Build a peak annotation CSV for ATAC peak-gene linkage and motif-to-peak prior weighting.")
+    annotate.add_argument("--input-h5ad", default=None, help="h5ad containing peak-level features in obsm.")
+    annotate.add_argument("--obsm-key", default="peak", help="obsm key for peak-level ATAC features.")
+    annotate.add_argument("--feature-names-csv", default=None, help="Optional CSV with feature_name/peak/name if peak names are not stored in h5ad.uns.")
+    annotate.add_argument("--gene-tss-csv", default=None, help="Optional gene annotation CSV with gene, chrom, and tss or start/end columns.")
+    annotate.add_argument("--motif-hits-csv", default=None, help="Optional motif-to-peak CSV with peak/feature_name and score/weight columns.")
+    annotate.add_argument("--marker-peaks-csv", default=None, help="Optional marker peak CSV with peak/feature_name and marker_score/score columns.")
+    annotate.add_argument("--target-genes", default=None, help="Optional comma-separated target genes used to upweight nearby genes or matching TF motifs.")
+    annotate.add_argument("--max-distance", type=int, default=250000, help="Maximum distance scale for peak-gene linkage scoring.")
+    annotate.add_argument("--out-csv", required=True, help="Output peak annotation CSV for --extra-feature-metadata-csv.")
+    annotate.set_defaults(func=run_annotate_peaks)
     fit = sub.add_parser("fit", help="Fit/evaluate virtual KO from a state-score CSV table.")
     fit.add_argument("--state-csv", required=True, help="CSV with one row per cell, one KO label column, and numeric state-score columns.")
     fit.add_argument("--ko-col", default="ko_target", help="Column containing control/KO labels.")
