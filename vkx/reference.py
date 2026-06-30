@@ -20,6 +20,7 @@ from .core import (
     select_prior_terms,
     split_ko,
 )
+from .interaction import fit_interaction_residual_model, predict_interaction_residual_delta
 from .preprocess import (
     append_obsm_scores,
     append_extra_obsm_scores,
@@ -86,6 +87,7 @@ def _load_training_state_from_h5ad(
     extra_obsm: list[tuple[str, str]] | None = None,
     max_extra_features_per_obsm: int | None = None,
     extra_feature_selection: str = "variance",
+    obs_columns: list[str] | None = None,
 ) -> tuple[pd.DataFrame, list[dict]]:
     adata = ad.read_h5ad(input_h5ad)
     if ko_col not in adata.obs:
@@ -94,6 +96,9 @@ def _load_training_state_from_h5ad(
     frame = compute_pathway_scores(adata, state_terms)
     frame.insert(0, "ko_target", adata.obs[ko_col].astype(str).to_numpy())
     frame.insert(0, "cell_id", adata.obs_names.astype(str))
+    for col in obs_columns or []:
+        if col and col in adata.obs and col != ko_col:
+            frame[col] = adata.obs[col].astype(str).to_numpy()
     extra = list(extra_obsm or [])
     if protein_obsm:
         extra.append((protein_obsm, protein_prefix))
@@ -110,8 +115,88 @@ def _load_training_state_from_h5ad(
 
 
 def _state_features(frame: pd.DataFrame) -> list[str]:
-    ignored = {"cell_id", "ko_target", "dataset", "state"}
+    ignored = {"cell_id", "ko_target", "dataset", "state", "batch", "sample", "donor"}
     return [col for col in frame.columns if col not in ignored and pd.api.types.is_numeric_dtype(frame[col])]
+
+
+def _apply_batch_control_centering(
+    frame: pd.DataFrame,
+    features: list[str],
+    batch_col: str | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not batch_col or batch_col not in frame.columns:
+        return frame, pd.DataFrame()
+    ctrl = frame.loc[control_mask(frame["ko_target"]), features]
+    if ctrl.empty:
+        return frame, pd.DataFrame()
+    adjusted = frame.copy()
+    global_control_mean = ctrl.mean().to_numpy(dtype=float)
+    rows = []
+    for batch, idx in adjusted.groupby(batch_col, observed=True).groups.items():
+        batch_idx = list(idx)
+        batch_ctrl = adjusted.loc[
+            adjusted.index.isin(batch_idx) & control_mask(adjusted["ko_target"]),
+            features,
+        ]
+        if batch_ctrl.empty:
+            offset = np.zeros(len(features), dtype=float)
+            n_control = 0
+            status = "no_batch_controls"
+        else:
+            offset = batch_ctrl.mean().to_numpy(dtype=float) - global_control_mean
+            n_control = len(batch_ctrl)
+            status = "centered_to_global_control"
+            adjusted.loc[batch_idx, features] = adjusted.loc[batch_idx, features].to_numpy(dtype=float) - offset.reshape(1, -1)
+        rows.append(
+            {
+                "batch": batch,
+                "n_cells": len(batch_idx),
+                "n_control_cells": n_control,
+                "mean_abs_control_offset_removed": float(np.mean(np.abs(offset))),
+                "status": status,
+            }
+        )
+    return adjusted, pd.DataFrame(rows)
+
+
+def _ko_delta_frame(frame: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+    ctrl = frame.loc[control_mask(frame["ko_target"]), features]
+    if ctrl.empty:
+        return pd.DataFrame()
+    control_mean = ctrl.mean().to_numpy(dtype=float)
+    rows = []
+    for ko, group in frame.loc[~control_mask(frame["ko_target"])].groupby("ko_target", observed=True):
+        values = group[features].mean().to_numpy(dtype=float) - control_mean
+        row = {
+            "ko_genes": str(ko),
+            "n_ko_genes": len(split_ko(str(ko))),
+            "n_cells": len(group),
+        }
+        row.update({feature: value for feature, value in zip(features, values)})
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _residual_profile(frame: pd.DataFrame, features: list[str]) -> dict:
+    residuals = []
+    for _, group in frame.loc[~control_mask(frame["ko_target"])].groupby("ko_target", observed=True):
+        values = group[features].to_numpy(dtype=float)
+        if len(values) >= 2:
+            residuals.append(values - np.nanmean(values, axis=0, keepdims=True))
+    if residuals:
+        bank = np.vstack(residuals)
+        std = np.nanstd(bank, axis=0)
+        radius = np.sqrt(np.nanmean(bank * bank, axis=1))
+        return {
+            "feature_residual_std": std,
+            "median_residual_radius": float(np.nanmedian(radius)),
+            "q90_residual_radius": float(np.nanquantile(radius, 0.90)),
+        }
+    return {
+        "feature_residual_std": np.ones(len(features), dtype=float) * 1e-6,
+        "median_residual_radius": 0.0,
+        "q90_residual_radius": 0.0,
+    }
 
 
 def train_reference_model(
@@ -127,6 +212,8 @@ def train_reference_model(
     max_extra_features_per_obsm: int | None = None,
     extra_feature_selection: str = "variance",
     dataset_name: str = "reference perturbation dataset",
+    batch_col: str | None = None,
+    interaction_mode: str = "auto",
 ) -> dict:
     if input_h5ad:
         frame, state_terms = _load_training_state_from_h5ad(
@@ -139,6 +226,7 @@ def train_reference_model(
             extra_obsm,
             max_extra_features_per_obsm,
             extra_feature_selection,
+            obs_columns=[batch_col] if batch_col else None,
         )
         input_kind = "h5ad"
     elif state_csv:
@@ -149,6 +237,9 @@ def train_reference_model(
         raise ValueError("Provide --input-h5ad or --state-csv.")
 
     features = _state_features(frame)
+    if batch_col and batch_col in features:
+        features = [feature for feature in features if feature != batch_col]
+    frame, batch_summary = _apply_batch_control_centering(frame, features, batch_col)
     feature_matrix = frame[features].to_numpy(dtype=float)
     feature_mean = np.nanmean(feature_matrix, axis=0)
     feature_std = np.nanstd(feature_matrix, axis=0)
@@ -159,13 +250,40 @@ def train_reference_model(
     prior_terms = select_prior_terms(Path(prior_dir), perturb_genes)
     train_labels, train_delta, control_mean = build_delta_table(frame, "ko_target", features, holdouts=set())
     model = fit_pls(train_labels, train_delta, prior_terms)
+    residual_profile = _residual_profile(frame, features)
+    interaction_model = None
+    interaction_status = "off"
+    if interaction_mode != "off":
+        try:
+            delta_frame = _ko_delta_frame(frame, features)
+            if (
+                not delta_frame.empty
+                and (delta_frame["n_ko_genes"] == 1).sum() >= 3
+                and (delta_frame["n_ko_genes"] == 2).sum() >= 3
+            ):
+                interaction_model = fit_interaction_residual_model(
+                    delta_frame,
+                    ko_col="ko_genes",
+                    n_ko_col="n_ko_genes",
+                    target_cols=features,
+                    prior_dir=prior_dir,
+                )
+                interaction_status = "trained"
+            else:
+                interaction_status = "not_enough_single_and_double_ko_labels"
+        except Exception as exc:
+            if interaction_mode == "on":
+                raise
+            interaction_status = f"failed_auto: {exc}"
     reference = {
-        "version": 2,
+        "version": 3,
         "model_type": "prior_constrained_residual_pls_reference",
         "supports_batch_ko": True,
         "supports_prediction_only_application": True,
         "supports_cell_type_stratification": True,
         "supports_double_ko": True,
+        "supports_interaction_residual": interaction_model is not None,
+        "supports_batch_covariate": bool(batch_col),
         "dataset_name": dataset_name,
         "input_kind": input_kind,
         "features": features,
@@ -180,6 +298,18 @@ def train_reference_model(
         "max_extra_features_per_obsm": max_extra_features_per_obsm,
         "extra_feature_selection": extra_feature_selection,
         "max_pathways": max_pathways,
+        "batch_col": batch_col,
+        "batch_summary": batch_summary.to_dict(orient="records"),
+        "interaction_mode": interaction_mode,
+        "interaction_status": interaction_status,
+        "interaction_model": interaction_model,
+        "uncertainty_model": {
+            "model_type": "hard_constraint_residual_band",
+            "feature_residual_std": residual_profile["feature_residual_std"],
+            "median_residual_radius": residual_profile["median_residual_radius"],
+            "q90_residual_radius": residual_profile["q90_residual_radius"],
+            "interpretation": "The KO mean delta remains fixed by the residual/PLS baseline; this profile only describes cell-level uncertainty around that hard constraint.",
+        },
         "feature_mean": feature_mean,
         "feature_std": feature_std,
         "training_distance_quantiles": {
@@ -216,9 +346,20 @@ def _write_reference_metadata(reference: dict, output_model: Path) -> None:
         "extra_obsm": reference.get("extra_obsm", []),
         "max_extra_features_per_obsm": reference.get("max_extra_features_per_obsm"),
         "extra_feature_selection": reference.get("extra_feature_selection"),
+        "batch_col": reference.get("batch_col"),
+        "batch_summary": reference.get("batch_summary", []),
+        "interaction_status": reference.get("interaction_status"),
+        "uncertainty_model": {
+            key: value
+            for key, value in (reference.get("uncertainty_model") or {}).items()
+            if key != "feature_residual_std"
+        },
         "supports": {
             "batch_ko": bool(reference.get("supports_batch_ko")),
             "double_ko": bool(reference.get("supports_double_ko")),
+            "interaction_residual": bool(reference.get("supports_interaction_residual")),
+            "batch_covariate": bool(reference.get("supports_batch_covariate")),
+            "hard_constrained_uncertainty": bool(reference.get("uncertainty_model")),
             "cell_type_stratification": bool(reference.get("supports_cell_type_stratification")),
             "prediction_only_application": bool(reference.get("supports_prediction_only_application")),
         },
@@ -330,13 +471,18 @@ This report checks what the reference model has learned and whether requested KO
     (out_dir / "reference_inspection_report.md").write_text(text, encoding="utf-8")
 
 
-def _align_features(frame: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+def _align_features(frame: pd.DataFrame, features: list[str], preserve_cols: list[str] | None = None) -> pd.DataFrame:
     aligned = frame.copy()
     for feature in features:
         if feature not in aligned.columns:
             aligned[feature] = 0.0
-    extra_cols = [col for col in aligned.columns if col not in {"cell_id", *features} and not pd.api.types.is_numeric_dtype(aligned[col])]
-    return aligned[["cell_id", *extra_cols, *features]]
+    preserve = [col for col in preserve_cols or [] if col and col in aligned.columns and col not in {"cell_id", *features}]
+    extra_cols = [
+        col
+        for col in aligned.columns
+        if col not in {"cell_id", *features, *preserve} and not pd.api.types.is_numeric_dtype(aligned[col])
+    ]
+    return aligned[["cell_id", *preserve, *extra_cols, *features]]
 
 
 def apply_reference_model(
@@ -348,6 +494,9 @@ def apply_reference_model(
     max_cells: int = 800,
     seed: int = 7,
     cell_type_col: str | None = None,
+    batch_col: str | None = None,
+    uncertainty_method: str = "none",
+    uncertainty_scale: float = 0.25,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     reference = load_reference_model(reference_model)
     out_dir = Path(out_dir)
@@ -361,7 +510,7 @@ def apply_reference_model(
             extra_obsm=reference.get("extra_obsm") or [],
             max_extra_features_per_obsm=reference.get("max_extra_features_per_obsm"),
             extra_feature_selection=reference.get("extra_feature_selection", "variance"),
-            obs_columns=[cell_type_col] if cell_type_col else None,
+            obs_columns=[col for col in [cell_type_col, batch_col] if col],
         )
     elif state_csv:
         frame = pd.read_csv(state_csv)
@@ -369,7 +518,7 @@ def apply_reference_model(
         raise ValueError("Provide --input-h5ad or --state-csv.")
 
     features = reference["features"]
-    frame = _align_features(frame, features)
+    frame = _align_features(frame, features, preserve_cols=[cell_type_col, batch_col])
     x = frame[features].to_numpy(dtype=float)
     prior_terms = _deserialize_prior_terms(reference["prior_terms"])
     rng = np.random.default_rng(seed)
@@ -382,10 +531,23 @@ def apply_reference_model(
 
     all_cells, delta_rows = [], []
     for ko in target_kos:
-        delta = reference["model"].predict(ko_prior_vector(ko, prior_terms).reshape(1, -1)).reshape(-1)
+        prediction_source = "prior_constrained_pls"
+        delta = None
+        if len(split_ko(ko)) == 2 and reference.get("interaction_model") is not None:
+            interaction_delta = predict_interaction_residual_delta(reference["interaction_model"], [ko])
+            if not interaction_delta.empty:
+                delta = interaction_delta.iloc[0][features].to_numpy(dtype=float)
+                prediction_source = "interaction_residual"
+        if delta is None:
+            delta = reference["model"].predict(ko_prior_vector(ko, prior_terms).reshape(1, -1)).reshape(-1)
         virtual = x + delta.reshape(1, -1)
-        delta_rows.append({"ko_target": ko, **{f"pred_delta_{feature}": value for feature, value in zip(features, delta)}})
-        before_cols = ["cell_id", *([cell_type_col] if cell_type_col and cell_type_col in base.columns else []), *features]
+        delta_rows.append({"ko_target": ko, "prediction_source": prediction_source, **{f"pred_delta_{feature}": value for feature, value in zip(features, delta)}})
+        before_cols = [
+            "cell_id",
+            *([cell_type_col] if cell_type_col and cell_type_col in base.columns else []),
+            *([batch_col] if batch_col and batch_col in base.columns else []),
+            *features,
+        ]
         before = base[before_cols].copy()
         before["ko_target"] = ko
         before["state"] = "input cells"
@@ -393,6 +555,8 @@ def apply_reference_model(
         after.insert(0, "cell_id", base["cell_id"].to_numpy())
         if cell_type_col and cell_type_col in base.columns:
             after[cell_type_col] = base[cell_type_col].to_numpy()
+        if batch_col and batch_col in base.columns:
+            after[batch_col] = base[batch_col].to_numpy()
         after["ko_target"] = ko
         after["state"] = "virtual KO cells"
         all_cells.extend([before, after])
@@ -406,9 +570,21 @@ def apply_reference_model(
     _write_target_interpretation(reference, target_kos, out_dir, prior_coverage=prior_coverage)
     if cell_type_col and cell_type_col in cells.columns:
         _write_cell_type_outputs(cells, features, cell_type_col, out_dir)
+    if batch_col and batch_col in cells.columns:
+        _write_batch_outputs(cells, batch_col, out_dir)
     _plot_apply_delta(deltas, out_dir)
+    if uncertainty_method != "none":
+        _write_uncertainty_outputs(deltas, reference, features, out_dir, uncertainty_method, uncertainty_scale)
     _plot_apply_pca(cells, features, out_dir)
-    _write_apply_report(reference, target_kos, out_dir, confidence, cell_type_col=cell_type_col)
+    _write_apply_report(
+        reference,
+        target_kos,
+        out_dir,
+        confidence,
+        cell_type_col=cell_type_col,
+        batch_col=batch_col,
+        uncertainty_method=uncertainty_method,
+    )
     return cells, deltas
 
 
@@ -425,8 +601,12 @@ def _write_target_interpretation(reference: dict, target_kos: list[str], out_dir
             mode = "single_ko"
             note = "single-gene reference application"
         elif len(genes) == 2:
-            mode = "double_ko_additive_prior_delta"
-            note = "double-KO prediction uses the learned prior-constrained delta for the pair; if real double-KO labels are available, run double-interaction for accuracy benchmarking"
+            if reference.get("interaction_model") is not None:
+                mode = "double_ko_interaction_residual"
+                note = "double-KO prediction uses the trained interaction residual model on top of single-gene additive effects"
+            else:
+                mode = "double_ko_prior_delta"
+                note = "double-KO prediction uses the learned prior-constrained delta for the pair; train a reference with double-KO labels to enable interaction residuals"
         else:
             mode = "multi_gene_exploratory"
             note = "more than two genes is exploratory and should be treated as low confidence unless specifically validated"
@@ -511,6 +691,28 @@ def _plot_cell_type_delta(table: pd.DataFrame, cell_type_col: str, out_dir: Path
     ax.set_ylabel("")
     fig.savefig(out_dir / "04_cell_type_predicted_delta_heatmap.png", bbox_inches="tight", dpi=300)
     plt.close(fig)
+
+
+def _write_batch_outputs(cells: pd.DataFrame, batch_col: str, out_dir: Path) -> pd.DataFrame:
+    table = (
+        cells.groupby(["ko_target", batch_col, "state"], observed=True)
+        .size()
+        .rename("n_cells")
+        .reset_index()
+    )
+    table.to_csv(out_dir / "batch_composition.csv", index=False)
+    setup_plot()
+    fig, ax = plt.subplots(figsize=(max(6.5, 2.6 * table["ko_target"].nunique()), 4.6), constrained_layout=True)
+    plot = table.loc[table["state"] == "input cells"].copy()
+    if not plot.empty:
+        sns.barplot(data=plot, x="ko_target", y="n_cells", hue=batch_col, ax=ax)
+        ax.set_title("Input Cells by Batch")
+        ax.set_xlabel("Requested virtual KO")
+        ax.set_ylabel("Cells")
+        ax.legend(title=batch_col, bbox_to_anchor=(1.02, 1), loc="upper left")
+        fig.savefig(out_dir / "06_batch_composition.png", bbox_inches="tight", dpi=300)
+    plt.close(fig)
+    return table
 
 
 def _write_transfer_confidence(
@@ -619,6 +821,66 @@ def _plot_transfer_confidence(confidence: pd.DataFrame, out_dir: Path) -> None:
     plt.close(fig)
 
 
+def _write_uncertainty_outputs(
+    deltas: pd.DataFrame,
+    reference: dict,
+    features: list[str],
+    out_dir: Path,
+    method: str,
+    scale: float,
+    max_features: int = 12,
+) -> pd.DataFrame:
+    profile = reference.get("uncertainty_model") or {}
+    residual_std = np.asarray(profile.get("feature_residual_std", np.ones(len(features)) * 1e-6), dtype=float)
+    if residual_std.shape[0] != len(features):
+        residual_std = np.resize(residual_std, len(features))
+    rows = []
+    for _, row in deltas.iterrows():
+        for feature, std in zip(features, residual_std):
+            pred = float(row[f"pred_delta_{feature}"])
+            width = float(abs(scale) * std)
+            rows.append(
+                {
+                    "ko_target": row["ko_target"],
+                    "feature": feature,
+                    "uncertainty_method": method,
+                    "prediction_source": row.get("prediction_source", "unknown"),
+                    "predicted_delta": pred,
+                    "lower_delta": pred - width,
+                    "upper_delta": pred + width,
+                    "interval_half_width": width,
+                }
+            )
+    table = pd.DataFrame(rows)
+    table.to_csv(out_dir / "uncertainty_intervals.csv", index=False)
+    score = table.groupby("feature")["predicted_delta"].apply(lambda x: np.max(np.abs(x))).sort_values(ascending=False)
+    keep = set(score.head(max_features).index)
+    plot = table.loc[table["feature"].isin(keep)].copy()
+    if plot.empty:
+        return table
+    plot["target_feature"] = plot["ko_target"].astype(str) + " | " + plot["feature"].astype(str).str.replace("pathway_", "", regex=False).str.replace("protein_", "", regex=False)
+    plot = plot.sort_values("predicted_delta")
+    setup_plot()
+    fig, ax = plt.subplots(figsize=(8.4, max(5, 0.45 * len(plot))), constrained_layout=True)
+    ax.errorbar(
+        plot["predicted_delta"],
+        plot["target_feature"],
+        xerr=[plot["predicted_delta"] - plot["lower_delta"], plot["upper_delta"] - plot["predicted_delta"]],
+        fmt="o",
+        color="#4C78A8",
+        ecolor="#9ECAE1",
+        elinewidth=2,
+        capsize=3,
+    )
+    ax.axvline(0, color="0.25", linestyle="--", linewidth=1)
+    ax.set_title("Hard-Constrained KO Uncertainty Band")
+    ax.set_xlabel("Predicted delta with residual uncertainty")
+    ax.set_ylabel("")
+    fig.savefig(out_dir / "07_uncertainty_intervals.png", bbox_inches="tight", dpi=300)
+    plt.close(fig)
+    return table
+
+
 def _plot_apply_delta(deltas: pd.DataFrame, out_dir: Path, max_features: int = 10) -> None:
     setup_plot()
     rows = []
@@ -667,6 +929,8 @@ def _write_apply_report(
     out_dir: Path,
     confidence: pd.DataFrame | None = None,
     cell_type_col: str | None = None,
+    batch_col: str | None = None,
+    uncertainty_method: str = "none",
 ) -> None:
     confidence_text = "not available"
     if confidence is not None and not confidence.empty:
@@ -682,6 +946,9 @@ This output applies a reference perturbation model to input cells that may not h
 - State features: {len(reference.get('features', []))}
 - Legacy protein/extra modality key: {reference.get('protein_obsm') or 'none'}
 - Extra modalities: {reference.get('extra_obsm') or []}
+- Batch covariate used during reference training: {reference.get('batch_col') or 'not provided'}
+- Double-KO interaction residual: {reference.get('interaction_status') or 'not trained'}
+- Hard-constrained uncertainty model: {uncertainty_method}
 
 ## Target KO
 
@@ -697,6 +964,8 @@ This is the correct mode for ordinary 10X, DOGMA-seq, TEA-seq or other unlabeled
 
 - Batch KO targets requested: {len(target_kos)}
 - Cell-type stratification column: {cell_type_col or 'not provided'}
+- Application batch column: {batch_col or 'not provided'}
+- Uncertainty output: {uncertainty_method}
 
 ## Transfer Confidence
 
@@ -713,6 +982,8 @@ Generated files:
 - `02_input_vs_virtual_pca.png`
 - `03_transfer_confidence.png`
 - `05_prior_coverage.png`
+- `06_batch_composition.png` when a batch column is provided.
+- `uncertainty_intervals.csv` and `07_uncertainty_intervals.png` when uncertainty is enabled.
 - `cell_type_predicted_delta.csv` and `04_cell_type_predicted_delta_heatmap.png` when a cell-type column is provided.
 """
     (out_dir / "apply_report.md").write_text(text, encoding="utf-8")
@@ -740,5 +1011,7 @@ This folder contains virtual knockout predictions for input cells.
 - `03_transfer_confidence.png`: whether the input cells and KO targets are close to the reference training regime.
 - `04_cell_type_predicted_delta_heatmap.png`: cell-type-specific predicted changes, when available.
 - `05_prior_coverage.png`: whether requested KO genes are covered by pathway/TF/PPI/motif priors.
+- `06_batch_composition.png`: input-cell batch composition, when a batch column is provided.
+- `07_uncertainty_intervals.png`: residual uncertainty band around the hard-constrained KO delta, when enabled.
 """
     (out_dir / "prediction_only_report.md").write_text(prediction, encoding="utf-8")

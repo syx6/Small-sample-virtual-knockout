@@ -217,12 +217,16 @@ def run_train_reference(args: argparse.Namespace) -> None:
         max_extra_features_per_obsm=args.max_extra_features_per_obsm,
         extra_feature_selection=args.extra_feature_selection,
         dataset_name=args.dataset_name,
+        batch_col=args.batch_col,
+        interaction_mode=args.interaction_mode,
     )
     print("Saved reference virtual KO model:")
     print(f"  model: {args.output_model}")
     print(f"  metadata: {args.output_model}.metadata.json")
     print(f"  training KO labels: {len(reference['training_ko_labels'])}")
     print(f"  state features: {len(reference['features'])}")
+    print(f"  interaction residual: {reference.get('interaction_status')}")
+    print(f"  batch covariate: {reference.get('batch_col') or 'not provided'}")
 
 
 def run_apply_reference(args: argparse.Namespace) -> None:
@@ -235,6 +239,9 @@ def run_apply_reference(args: argparse.Namespace) -> None:
         max_cells=args.max_cells,
         seed=args.seed,
         cell_type_col=args.cell_type_col,
+        batch_col=args.batch_col,
+        uncertainty_method=args.uncertainty_method,
+        uncertainty_scale=args.uncertainty_scale,
     )
     print("Applied reference virtual KO model:")
     print(f"  virtual cells: {args.out_dir}\\applied_virtual_cells.csv")
@@ -363,7 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
     raw.add_argument("--protein-prefix", default="protein")
     raw.add_argument("--extra-obsm", default=None, help="Comma-separated extra obsm specs, e.g. protein:protein,atac:atac. Supersedes --protein-obsm for new workflows.")
     raw.add_argument("--max-extra-features-per-obsm", type=int, default=None, help="Optional cap for each extra obsm modality, useful for large chromVAR/motif/peak matrices.")
-    raw.add_argument("--extra-feature-selection", choices=["variance", "ko_effect", "hybrid"], default="variance", help="How to choose capped extra obsm features. Use hybrid for labeled ATAC/chromVAR perturbation data.")
+    raw.add_argument("--extra-feature-selection", choices=["variance", "ko_effect", "hybrid", "atac_peak"], default="variance", help="How to choose capped extra obsm features. Use atac_peak for sparse raw peak/count matrices.")
     raw.add_argument("--calibrate", choices=["auto", "none", "global_scale", "feature_scale"], default="auto")
     raw.add_argument("--shape-calibrate", choices=["none", "variance", "quantile"], default="none", help="Optional distribution-shape calibration. Use variance or quantile for sparse ATAC/peak features.")
     raw.add_argument("--max-cells-per-state", type=int, default=180)
@@ -378,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--protein-prefix", default="protein")
     score.add_argument("--extra-obsm", default=None, help="Comma-separated extra obsm specs, e.g. protein:protein,atac:atac.")
     score.add_argument("--max-extra-features-per-obsm", type=int, default=None, help="Optional cap for each extra obsm modality.")
-    score.add_argument("--extra-feature-selection", choices=["variance", "ko_effect", "hybrid"], default="variance", help="Feature selection for extra obsm. Without KO labels, ko_effect/hybrid fall back to variance.")
+    score.add_argument("--extra-feature-selection", choices=["variance", "ko_effect", "hybrid", "atac_peak"], default="variance", help="Feature selection for extra obsm. Without KO labels, KO-effect methods fall back toward unsupervised scores.")
     score.set_defaults(func=run_score)
     train_ref = sub.add_parser("train-reference", help="Train and save a reference KO-delta model from perturbation data.")
     train_ref.add_argument("--input-h5ad", default=None, help="Perturbation h5ad with RNA matrix and KO labels.")
@@ -392,7 +399,9 @@ def build_parser() -> argparse.ArgumentParser:
     train_ref.add_argument("--protein-prefix", default="protein")
     train_ref.add_argument("--extra-obsm", default=None, help="Comma-separated extra obsm specs, e.g. protein:protein,atac:atac.")
     train_ref.add_argument("--max-extra-features-per-obsm", type=int, default=None, help="Optional cap for each extra obsm modality during reference training.")
-    train_ref.add_argument("--extra-feature-selection", choices=["variance", "ko_effect", "hybrid"], default="variance", help="How to choose capped extra obsm features during reference training.")
+    train_ref.add_argument("--extra-feature-selection", choices=["variance", "ko_effect", "hybrid", "atac_peak"], default="variance", help="How to choose capped extra obsm features during reference training.")
+    train_ref.add_argument("--batch-col", default=None, help="Optional obs/state CSV batch/sample/donor column. Control cells are used to remove batch-specific baseline offsets.")
+    train_ref.add_argument("--interaction-mode", choices=["auto", "on", "off"], default="auto", help="Train a double-KO interaction residual model when single- and double-KO labels are available.")
     train_ref.set_defaults(func=run_train_reference)
 
     apply_ref = sub.add_parser("apply-reference", help="Apply a saved reference KO model to ordinary unlabeled cells.")
@@ -404,6 +413,9 @@ def build_parser() -> argparse.ArgumentParser:
     apply_ref.add_argument("--out-dir", default="results/reference_apply_demo")
     apply_ref.add_argument("--max-cells", type=int, default=800)
     apply_ref.add_argument("--cell-type-col", default=None, help="Optional obs/state CSV column for cell-type stratified prediction-only outputs.")
+    apply_ref.add_argument("--batch-col", default=None, help="Optional obs/state CSV batch/sample/donor column for batch-composition output.")
+    apply_ref.add_argument("--uncertainty-method", choices=["none", "hard-residual", "vae", "flow", "diffusion"], default="none", help="Optional hard-constrained uncertainty band. VAE/flow/diffusion currently share the same hard residual anchor unless a custom generator is plugged in.")
+    apply_ref.add_argument("--uncertainty-scale", type=float, default=0.25, help="Width multiplier for the hard-constrained residual uncertainty band.")
     apply_ref.add_argument("--seed", type=int, default=7)
     apply_ref.set_defaults(func=run_apply_reference)
     inspect_ref = sub.add_parser("inspect-reference", help="Inspect a saved reference KO model before applying it.")

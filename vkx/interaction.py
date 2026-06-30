@@ -134,6 +134,79 @@ def _loo_interaction_residual(
     return np.vstack(preds)
 
 
+def fit_interaction_residual_model(
+    delta: pd.DataFrame,
+    ko_col: str,
+    n_ko_col: str,
+    target_cols: list[str],
+    prior_dir: str | Path,
+) -> dict:
+    single = delta.loc[delta[n_ko_col] == 1].copy()
+    combo = delta.loc[delta[n_ko_col] == 2].copy().reset_index(drop=True)
+    if len(single) < 3 or len(combo) < 3:
+        raise ValueError("Need at least 3 single-gene rows and 3 double-gene rows.")
+    perturb_genes = {gene for label in delta[ko_col].astype(str) for gene in split_ko(label)}
+    terms = _select_terms(Path(prior_dir), perturb_genes)
+    additive = _additive_predictions(single, combo, ko_col, target_cols)
+    truth = combo[target_cols].to_numpy(dtype=float)
+    residual = truth - additive
+    x_train, gene_mlb = _combo_features(combo, ko_col, terms)
+    x_scaler = StandardScaler(with_mean=False)
+    y_scaler = StandardScaler()
+    xt = x_scaler.fit_transform(x_train)
+    yt = y_scaler.fit_transform(residual)
+    model = RidgeCV(alphas=np.array([0.1, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0]))
+    model.fit(xt, yt)
+    single_effects = {}
+    for _, row in single.iterrows():
+        genes = split_ko(row[ko_col])
+        if len(genes) == 1:
+            single_effects[genes[0]] = row[target_cols].to_numpy(dtype=float)
+    return {
+        "model_type": "prior_weighted_double_ko_interaction_residual",
+        "ko_col": ko_col,
+        "n_ko_col": n_ko_col,
+        "target_cols": target_cols,
+        "terms": terms,
+        "gene_mlb": gene_mlb,
+        "x_scaler": x_scaler,
+        "y_scaler": y_scaler,
+        "model": model,
+        "single_effects": single_effects,
+        "mean_single_effect": single[target_cols].mean().to_numpy(dtype=float),
+        "training_double_ko_labels": combo[ko_col].astype(str).tolist(),
+        "training_single_ko_labels": single[ko_col].astype(str).tolist(),
+    }
+
+
+def predict_interaction_residual_delta(interaction_model: dict, ko_labels: list[str]) -> pd.DataFrame:
+    target_cols = list(interaction_model["target_cols"])
+    rows = []
+    for ko in ko_labels:
+        genes = split_ko(ko)
+        if len(genes) != 2:
+            continue
+        additive_parts = [
+            interaction_model["single_effects"].get(gene, interaction_model["mean_single_effect"])
+            for gene in genes
+        ]
+        additive = np.sum(additive_parts, axis=0)
+        query = pd.DataFrame({interaction_model.get("ko_col", "ko_genes"): [ko]})
+        x_query, _ = _combo_features(
+            query,
+            interaction_model.get("ko_col", "ko_genes"),
+            interaction_model["terms"],
+            interaction_model["gene_mlb"],
+        )
+        pred_residual = interaction_model["y_scaler"].inverse_transform(
+            interaction_model["model"].predict(interaction_model["x_scaler"].transform(x_query))
+        ).reshape(-1)
+        row = {"ko_target": ko, "prediction_source": "interaction_residual"}
+        row.update({feature: value for feature, value in zip(target_cols, additive + pred_residual)})
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def _metric_rows(combo: pd.DataFrame, pred: np.ndarray, ko_col: str, target_cols: list[str], model: str) -> list[dict]:
     rows = []
     truth = combo[target_cols].to_numpy(dtype=float)

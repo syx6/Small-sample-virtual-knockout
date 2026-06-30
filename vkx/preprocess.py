@@ -173,6 +173,15 @@ def select_obsm_feature_indices(
             score = variance
         else:
             score = 0.45 * _scaled_rank(variance) + 0.55 * _scaled_rank(effect)
+    elif selection == "atac_peak":
+        effect = _ko_effect_scores(values, labels)
+        open_fraction = np.nanmean(values > 0, axis=0)
+        sparse_window = 1.0 - np.abs(open_fraction - 0.20) / 0.20
+        sparse_window = np.clip(sparse_window, 0.0, 1.0)
+        if effect is None:
+            score = 0.55 * _scaled_rank(variance) + 0.45 * _scaled_rank(sparse_window)
+        else:
+            score = 0.35 * _scaled_rank(variance) + 0.40 * _scaled_rank(effect) + 0.25 * _scaled_rank(sparse_window)
     else:
         score = variance
     return np.sort(np.argsort(np.nan_to_num(score, nan=-np.inf))[::-1][:max_features])

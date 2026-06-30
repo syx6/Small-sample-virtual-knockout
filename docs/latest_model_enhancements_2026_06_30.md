@@ -1,0 +1,187 @@
+# 2026-06-30 模型增强说明：reference、双敲、batch、三模态与 ATAC peak
+
+本次更新把之前分散在实验脚本里的几个能力，进一步接入主软件接口。核心目标是：用户不需要理解内部脚本，也能用统一命令完成 reference model 训练、普通 10X/多模态数据应用、双敲预测和可视化输出。
+
+## 1. Interaction residual 已接入 reference model
+
+以前 double-KO interaction residual 只能通过 `double-interaction` 单独评估。现在 `train-reference` 会在训练集中同时存在足够单敲和双敲标签时，自动训练一个双敲交互残差模型。
+
+训练逻辑：
+
+- 单敲均值效应先作为 additive baseline。
+- 双敲真实效应减去 additive baseline，得到 interaction residual。
+- residual 再由 KO gene、pathway/TF/PPI/motif prior 和 pair-wise prior features 预测。
+- `apply-reference` 遇到双敲 `GENE1+GENE2` 时，会优先使用 interaction residual；如果训练数据不够，则回退到 prior-constrained PLS。
+
+输出解释：
+
+- `predicted_ko_delta.csv` 新增 `prediction_source`。
+- `prediction_source = interaction_residual` 表示该双敲使用了训练好的交互残差模型。
+- `prediction_source = prior_constrained_pls` 表示训练数据不足或目标不是双敲，使用稳定 baseline。
+
+推荐训练命令：
+
+```bash
+python -m vkx.cli train-reference \
+  --state-csv path/to/state_scores_with_ko.csv \
+  --ko-col ko_target \
+  --prior-dir data/priors \
+  --output-model results/reference_model.pkl \
+  --interaction-mode auto
+```
+
+强制要求必须训练 interaction residual：
+
+```bash
+python -m vkx.cli train-reference ... --interaction-mode on
+```
+
+如果数据里没有至少 3 个单敲和 3 个双敲标签，`--interaction-mode on` 会报错；`auto` 会自动回退并在 metadata 里写明原因。
+
+## 2. Batch covariate 显式建模
+
+新增 `--batch-col`。它适合 donor、sample、batch、library、replicate 等批次变量。
+
+目前采用小样本更稳的 control-centered batch correction：
+
+1. 在每个 batch 内计算 control cells 的平均状态。
+2. 计算全局 control cells 的平均状态。
+3. 用二者差值校正该 batch 的所有细胞。
+4. KO effect 在校正后的 state space 中学习。
+
+这样做的目的不是做复杂 batch integration，而是尽量防止模型把 donor/sample 差异误认为 KO 效应。
+
+训练：
+
+```bash
+python -m vkx.cli train-reference \
+  --state-csv path/to/state_scores_with_ko.csv \
+  --ko-col ko_target \
+  --batch-col donor \
+  --output-model results/reference_model.pkl
+```
+
+应用：
+
+```bash
+python -m vkx.cli apply-reference \
+  --reference-model results/reference_model.pkl \
+  --state-csv path/to/ordinary_10x_state_scores.csv \
+  --target-kos STAT1,STAT1+JAK2 \
+  --batch-col donor \
+  --out-dir results/reference_apply
+```
+
+新增输出：
+
+- `batch_composition.csv`
+- `06_batch_composition.png`
+- reference metadata 中的 `batch_summary`
+
+## 3. Hard-constrained uncertainty 输出
+
+新增 `--uncertainty-method` 和 `--uncertainty-scale`。
+
+当前默认策略不是自由 VAE / flow / diffusion，而是 hard-constrained residual band：
+
+- KO 平均方向仍由 residual/PLS baseline 固定。
+- 训练 KO 细胞围绕各自 KO 均值的残差宽度，用来估计单细胞不确定性。
+- 输出区间只表示“在 hard constraint 附近可能波动多大”，不允许生成器自由改变 KO 方向。
+
+应用命令：
+
+```bash
+python -m vkx.cli apply-reference \
+  --reference-model results/reference_model.pkl \
+  --state-csv path/to/ordinary_10x_state_scores.csv \
+  --target-kos STAT1+JAK2 \
+  --uncertainty-method hard-residual \
+  --uncertainty-scale 0.25 \
+  --out-dir results/reference_apply
+```
+
+输出：
+
+- `uncertainty_intervals.csv`
+- `07_uncertainty_intervals.png`
+
+说明：CLI 也预留了 `vae`、`flow`、`diffusion` 入口，但当前它们仍被限制在 hard residual anchor 框架内。后续真正接入轻量 neural generator 时，仍会保持“baseline 定方向，generator 只学方向附近不确定性”的原则。
+
+## 4. RNA + ADT + ATAC 输入方式
+
+用户输入仍然可以是普通单细胞矩阵，不需要自己提前算 pathway。
+
+推荐 h5ad 结构：
+
+```text
+adata.X                 RNA gene matrix
+adata.obs["ko_target"]  perturbation / KO label，可选
+adata.obs["batch"]      batch/sample/donor，可选
+adata.obs["cell_type"]  cell type，可选
+adata.obsm["protein"]   ADT / CITE-seq protein，可选
+adata.obsm["atac"]      ATAC gene activity 或 peak-level features，可选
+adata.obsm["chromvar"]  chromVAR motif activity，可选
+adata.obsm["peak"]      raw peak count / peak accessibility，可选
+```
+
+带 KO 标签时可以训练或 benchmark：
+
+```bash
+python -m vkx.cli train-reference \
+  --input-h5ad perturb_rna_adt_atac.h5ad \
+  --ko-col ko_target \
+  --extra-obsm protein:protein,chromvar:tf,peak:peak \
+  --extra-feature-selection atac_peak \
+  --max-extra-features-per-obsm 500 \
+  --output-model results/trimodal_reference.pkl
+```
+
+无 KO 标签的普通 10X / DOGMA / TEA-seq 只能做 reference application：
+
+```bash
+python -m vkx.cli apply-reference \
+  --reference-model results/trimodal_reference.pkl \
+  --input-h5ad ordinary_multiome.h5ad \
+  --target-kos STAT1,STAT1+JAK2 \
+  --extra-obsm protein:protein,chromvar:tf,peak:peak \
+  --out-dir results/prediction_only_multiome
+```
+
+注意：无 KO 标签时，软件不会报告真实准确率、AUC、R2 或 MAE；只能报告 predicted state shift、PCA/UMAP 类状态变化图、prior coverage、transfer confidence 和 uncertainty band。
+
+## 5. ATAC raw peak count 支持增强
+
+新增 `extra-feature-selection=atac_peak`。
+
+它比单纯 variance 更适合 raw peak/count：
+
+- 结合 peak 方差；
+- 结合 control vs KO 的 peak effect；
+- 结合开放比例，避免只选全局开放或几乎全关闭的 peak；
+- 为后续 motif-to-peak、peak-gene linkage 和 marker peak 加权留下接口。
+
+推荐：
+
+```bash
+python -m vkx.cli run \
+  --input-h5ad perturb_multiome.h5ad \
+  --ko-col ko_target \
+  --extra-obsm peak:peak,chromvar:tf \
+  --extra-feature-selection atac_peak \
+  --shape-calibrate quantile \
+  --target-kos KDM6A \
+  --out-dir results/atac_peak_virtual_ko
+```
+
+如果 peak 是原始非负 sparse peak/count，建议配合：
+
+- `--extra-feature-selection atac_peak`
+- `--shape-calibrate quantile`
+
+这样可以同时处理平均方向、开放比例和分位数形状。
+
+## 6. 当前仍需继续补齐的部分
+
+- 真正公开 RNA+ADT+ATAC 且带 perturbation 标签的数据集仍需要单独确认和下载；无标签 DOGMA/TEA-seq 不能当准确性 benchmark。
+- motif-to-peak annotation 和 peak-gene linkage 目前已有选择器接口，下一步需要接收外部 peak annotation 表并把权重写入 feature metadata。
+- VAE / flow matching / diffusion 入口已保留，但当前仍采用 hard residual uncertainty band；真正 neural generator 需要在有更多同类型 perturbation 数据后再训练。
