@@ -167,6 +167,23 @@ python -m vkx.cli apply-reference \
 docs/public_multimodal_perturbation_benchmark_registry_2026_06_30.md
 ```
 
+软件也提供 registry 命令：
+
+```bash
+python -m vkx.cli benchmark-registry \
+  --out-dir results/public_benchmark_registry
+```
+
+并且 `validate-benchmark` 会输出更具体的模式：
+
+- `labelled_rna_atac_benchmark`
+- `labelled_rna_adt_benchmark`
+- `labelled_rna_adt_atac_benchmark`
+- `trimodal_prediction_only`
+- `prediction_only_or_incomplete`
+
+只有 labelled benchmark 才能报告真实准确率、AUC、R2 和 MAE；`trimodal_prediction_only` 只能看预测状态变化、prior coverage、transfer confidence 和 uncertainty band。
+
 ## 6. ATAC raw peak count 与 peak annotation
 
 新增 `extra-feature-selection=atac_peak`。

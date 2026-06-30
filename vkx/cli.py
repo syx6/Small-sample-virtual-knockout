@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .benchmark import validate_multimodal_benchmark
+from .benchmark import public_benchmark_registry, validate_multimodal_benchmark
 from .core import run_virtual_ko
 from .importers import import_single_cell_data, write_import_outputs
 from .interaction import run_double_interaction
@@ -100,6 +100,14 @@ def run_validate_benchmark(args: argparse.Namespace) -> None:
     print(f"  overview figure: {args.out_dir}\\benchmark_overview.png")
     print(f"  modality figure: {args.out_dir}\\benchmark_modalities.png")
     print(f"  report: {args.out_dir}\\benchmark_readiness_report.md")
+
+
+def run_benchmark_registry(args: argparse.Namespace) -> None:
+    table = public_benchmark_registry(args.out_dir)
+    print("Saved public benchmark registry:")
+    print(f"  registry: {args.out_dir}\\public_benchmark_registry.csv")
+    print(f"  report: {args.out_dir}\\public_benchmark_registry_report.md")
+    print(table[["dataset", "status", "recommended_use"]].to_string(index=False))
 
 
 def run_assemble_multiome(args: argparse.Namespace) -> None:
@@ -400,6 +408,9 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--extra-obsm", default=None, help="Comma-separated modality specs to check, e.g. protein:protein,atac:atac,chromvar:tf,peak:peak.")
     bench.add_argument("--out-dir", default="results/benchmark_readiness")
     bench.set_defaults(func=run_validate_benchmark)
+    registry = sub.add_parser("benchmark-registry", help="Write the public multimodal perturbation benchmark registry and interpretation boundaries.")
+    registry.add_argument("--out-dir", default="results/public_benchmark_registry")
+    registry.set_defaults(func=run_benchmark_registry)
     multiome = sub.add_parser("assemble-multiome", help="Assemble RNA and ATAC matrices plus KO metadata into one benchmark-ready h5ad.")
     multiome.add_argument("--rna-input", required=True)
     multiome.add_argument("--rna-format", required=True, choices=["h5ad", "10x_mtx", "10x_h5"])
