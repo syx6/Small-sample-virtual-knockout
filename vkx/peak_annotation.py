@@ -8,6 +8,7 @@ import pandas as pd
 
 
 PEAK_RE = re.compile(r"^(?P<chrom>chr[^:_-]+|[0-9XYM]+)[:_-](?P<start>[0-9]+)[-_](?P<end>[0-9]+)$", re.IGNORECASE)
+GTF_ATTR_RE = re.compile(r'(?P<key>[A-Za-z0-9_.-]+)\s+(?P<quote>"?)(?P<value>[^";]+)(?P=quote)')
 
 
 def _obsm_names(adata, obsm_key: str) -> list[str]:
@@ -72,6 +73,133 @@ def _standardize_gene_tss(path: str | Path | None) -> pd.DataFrame:
         end = pd.to_numeric(table[end_col], errors="coerce") if end_col else start
         out["tss"] = (start + end) / 2.0
     return out.dropna(subset=["tss"]).reset_index(drop=True)
+
+
+def _parse_gtf_attributes(value: str) -> dict[str, str]:
+    attrs = {}
+    for match in GTF_ATTR_RE.finditer(str(value)):
+        attrs[match.group("key")] = match.group("value").strip()
+    return attrs
+
+
+def make_gene_tss_from_gtf(
+    gtf: str | Path,
+    out_csv: str | Path,
+    feature_type: str = "gene",
+    gene_name_attr: str = "gene_name",
+    gene_id_attr: str = "gene_id",
+) -> pd.DataFrame:
+    rows = []
+    gtf = Path(gtf)
+    with gtf.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip() or line.startswith("#"):
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 9 or parts[2] != feature_type:
+                continue
+            chrom, _, _, start, end, _, strand, _, attrs_text = parts
+            chrom = chrom.lstrip("\ufeff")
+            attrs = _parse_gtf_attributes(attrs_text)
+            gene = attrs.get(gene_name_attr) or attrs.get(gene_id_attr)
+            if not gene:
+                continue
+            start_i = int(start)
+            end_i = int(end)
+            tss = start_i if strand != "-" else end_i
+            if not chrom.lower().startswith("chr"):
+                chrom = f"chr{chrom}"
+            rows.append(
+                {
+                    "gene": str(gene).upper(),
+                    "gene_id": attrs.get(gene_id_attr, ""),
+                    "chrom": chrom,
+                    "tss": tss,
+                    "strand": strand,
+                    "start": start_i,
+                    "end": end_i,
+                }
+            )
+    table = pd.DataFrame(rows).drop_duplicates(subset=["gene", "chrom", "tss"]).reset_index(drop=True)
+    out_csv = Path(out_csv)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(out_csv, index=False)
+    _write_tss_report(table, out_csv, gtf)
+    return table
+
+
+def _write_tss_report(table: pd.DataFrame, out_csv: Path, source_gtf: Path) -> None:
+    chroms = ", ".join(table["chrom"].dropna().astype(str).value_counts().head(8).index.tolist())
+    text = f"""# Gene TSS Report
+
+Generated gene TSS file:
+
+```text
+{out_csv}
+```
+
+Source annotation:
+
+```text
+{source_gtf}
+```
+
+## Summary
+
+- Genes/TSS rows: {len(table)}
+- Unique genes: {table['gene'].nunique() if not table.empty else 0}
+- Top chromosomes: {chroms or 'not available'}
+
+## Columns
+
+- `gene`: upper-case gene symbol used by VKX.
+- `gene_id`: original gene id when available.
+- `chrom`: chromosome with `chr` prefix.
+- `tss`: transcription start site.
+- `strand`, `start`, `end`: original gene model coordinates.
+"""
+    out_csv.with_suffix(".report.md").write_text(text, encoding="utf-8")
+
+
+def standardize_peak_score_table(
+    input_csv: str | Path,
+    out_csv: str | Path,
+    table_type: str = "motif",
+    peak_col: str | None = None,
+    score_col: str | None = None,
+    tf_col: str | None = None,
+) -> pd.DataFrame:
+    table = pd.read_csv(input_csv)
+    peak_col = peak_col or next((col for col in ["peak", "feature_name", "name", "raw_feature_name", "region"] if col in table.columns), None)
+    if not peak_col:
+        raise ValueError("Input score table needs a peak/feature_name/name/raw_feature_name/region column.")
+    score_col = score_col or next((col for col in ["score", "motif_score", "marker_score", "weight", "qvalue", "pvalue"] if col in table.columns), None)
+    out = pd.DataFrame({"peak": table[peak_col].astype(str), "feature_name": table[peak_col].astype(str)})
+    if tf_col and tf_col in table.columns:
+        out["tf"] = table[tf_col].astype(str).str.upper()
+    else:
+        inferred_tf = next((col for col in ["tf", "motif", "gene", "target_gene"] if col in table.columns), None)
+        if inferred_tf:
+            out["tf"] = table[inferred_tf].astype(str).str.upper()
+    if score_col:
+        raw = pd.to_numeric(table[score_col], errors="coerce")
+        if score_col.lower() in {"pvalue", "p_value", "qvalue", "q_value"}:
+            score = -np.log10(raw.clip(lower=1e-300))
+        else:
+            score = raw
+        score = score.fillna(0.0)
+        max_score = float(score.max()) if len(score) else 0.0
+        score = score / max_score if max_score > 0 else score
+    else:
+        score = pd.Series(np.ones(len(table), dtype=float))
+    if table_type == "marker":
+        out["marker_score"] = score
+    else:
+        out["motif_score"] = score
+    out_csv = Path(out_csv)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(out_csv, index=False)
+    return out
 
 
 def _target_set(value: str | None) -> set[str]:

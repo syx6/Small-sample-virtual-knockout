@@ -10,7 +10,7 @@ from .core import run_virtual_ko
 from .importers import import_single_cell_data, write_import_outputs
 from .interaction import run_double_interaction
 from .multiome import assemble_multiome_benchmark
-from .peak_annotation import annotate_peaks
+from .peak_annotation import annotate_peaks, make_gene_tss_from_gtf, standardize_peak_score_table
 from .preprocess import csv_matrix_to_state_table, h5ad_to_state_scores, h5ad_to_state_table, parse_extra_obsm_specs
 from .reference import apply_reference_model, inspect_reference_model, train_reference_model
 from .visualization import make_all_plots
@@ -141,6 +141,34 @@ def run_annotate_peaks(args: argparse.Namespace) -> None:
     print(f"  report: {Path(args.out_csv).with_suffix('.report.md')}")
     print(f"  features: {len(table)}")
     print(f"  nonzero regulatory prior: {(table['regulatory_prior_score'] > 0).sum()}")
+
+
+def run_make_gene_tss(args: argparse.Namespace) -> None:
+    table = make_gene_tss_from_gtf(
+        gtf=args.gtf,
+        out_csv=args.out_csv,
+        feature_type=args.feature_type,
+        gene_name_attr=args.gene_name_attr,
+        gene_id_attr=args.gene_id_attr,
+    )
+    print("Created gene TSS table:")
+    print(f"  gene TSS CSV: {args.out_csv}")
+    print(f"  report: {Path(args.out_csv).with_suffix('.report.md')}")
+    print(f"  rows: {len(table)}")
+
+
+def run_standardize_peak_scores(args: argparse.Namespace) -> None:
+    table = standardize_peak_score_table(
+        input_csv=args.input_csv,
+        out_csv=args.out_csv,
+        table_type=args.table_type,
+        peak_col=args.peak_col,
+        score_col=args.score_col,
+        tf_col=args.tf_col,
+    )
+    print("Standardized peak score table:")
+    print(f"  output CSV: {args.out_csv}")
+    print(f"  rows: {len(table)}")
 
 
 def run_from_raw(args: argparse.Namespace) -> None:
@@ -373,6 +401,21 @@ def build_parser() -> argparse.ArgumentParser:
     annotate.add_argument("--max-distance", type=int, default=250000, help="Maximum distance scale for peak-gene linkage scoring.")
     annotate.add_argument("--out-csv", required=True, help="Output peak annotation CSV for --extra-feature-metadata-csv.")
     annotate.set_defaults(func=run_annotate_peaks)
+    tss = sub.add_parser("make-gene-tss", help="Convert a GTF/GFF-style gene annotation file into the gene_tss.csv used by annotate-peaks.")
+    tss.add_argument("--gtf", required=True, help="GENCODE/Ensembl-style GTF file.")
+    tss.add_argument("--out-csv", required=True, help="Output gene_tss.csv.")
+    tss.add_argument("--feature-type", default="gene", help="Feature type to read from the GTF, usually gene.")
+    tss.add_argument("--gene-name-attr", default="gene_name", help="GTF attribute used as gene symbol.")
+    tss.add_argument("--gene-id-attr", default="gene_id", help="GTF attribute used as stable gene id.")
+    tss.set_defaults(func=run_make_gene_tss)
+    peak_scores = sub.add_parser("standardize-peak-scores", help="Convert motif/marker peak score tables into the columns expected by annotate-peaks.")
+    peak_scores.add_argument("--input-csv", required=True)
+    peak_scores.add_argument("--out-csv", required=True)
+    peak_scores.add_argument("--table-type", choices=["motif", "marker"], default="motif")
+    peak_scores.add_argument("--peak-col", default=None, help="Column containing peak names. Auto-detected when omitted.")
+    peak_scores.add_argument("--score-col", default=None, help="Column containing motif/marker score. Auto-detected when omitted.")
+    peak_scores.add_argument("--tf-col", default=None, help="Optional TF/motif/gene column.")
+    peak_scores.set_defaults(func=run_standardize_peak_scores)
     fit = sub.add_parser("fit", help="Fit/evaluate virtual KO from a state-score CSV table.")
     fit.add_argument("--state-csv", required=True, help="CSV with one row per cell, one KO label column, and numeric state-score columns.")
     fit.add_argument("--ko-col", default="ko_target", help="Column containing control/KO labels.")

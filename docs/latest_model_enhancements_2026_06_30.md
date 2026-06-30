@@ -196,12 +196,26 @@ regulatory_prior_score
 如果用户还没有 annotation 表，可以先用 `annotate-peaks` 自动生成一个基础版本：
 
 ```bash
+python -m vkx.cli make-gene-tss \
+  --gtf gencode.annotation.gtf \
+  --out-csv results/gene_tss.csv
+
+python -m vkx.cli standardize-peak-scores \
+  --input-csv raw_motif_hits.csv \
+  --table-type motif \
+  --out-csv results/motif_to_peak.csv
+
+python -m vkx.cli standardize-peak-scores \
+  --input-csv raw_marker_peaks.csv \
+  --table-type marker \
+  --out-csv results/marker_peaks.csv
+
 python -m vkx.cli annotate-peaks \
   --input-h5ad perturb_multiome.h5ad \
   --obsm-key peak \
-  --gene-tss-csv gene_tss.csv \
-  --motif-hits-csv motif_to_peak.csv \
-  --marker-peaks-csv marker_peaks.csv \
+  --gene-tss-csv results/gene_tss.csv \
+  --motif-hits-csv results/motif_to_peak.csv \
+  --marker-peaks-csv results/marker_peaks.csv \
   --target-genes KDM6A,STAT1 \
   --out-csv results/peak_annotation.csv
 ```
@@ -233,5 +247,5 @@ python -m vkx.cli run \
 
 - 真正公开 RNA+ADT+ATAC 且带 perturbation 标签的数据集仍未确认；找到后再升级为 full trimodal labelled benchmark。
 - motif-to-peak annotation 和 peak-gene linkage 已经可以通过 `--extra-feature-metadata-csv` 输入并写入 feature metadata；下一步是开发自动生成 annotation 表的辅助脚本。
-- 已新增 `annotate-peaks` 自动生成基础 peak annotation 表；下一步可以继续接 Ensembl/GENCODE 自动 TSS 下载和 motif scanner 输出格式转换。
+- 已新增 `make-gene-tss`、`standardize-peak-scores` 和 `annotate-peaks`，可以从 GTF、motif hits、marker peaks 自动生成基础 peak annotation 表；下一步可以继续接 Ensembl/GENCODE 自动下载和更具体的 motif scanner 输出格式转换。
 - VAE / flow matching / diffusion 入口已保留，但当前仍采用 hard residual uncertainty band；真正 neural generator 需要在有更多同类型 perturbation 数据后再训练。
