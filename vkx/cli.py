@@ -137,6 +137,7 @@ def run_from_raw(args: argparse.Namespace) -> None:
             extra_obsm=parse_extra_obsm_specs(args.extra_obsm),
             max_extra_features_per_obsm=args.max_extra_features_per_obsm,
             extra_feature_selection=args.extra_feature_selection,
+            extra_feature_metadata_csv=args.extra_feature_metadata_csv,
         )
     elif args.input_csv:
         frame, manifest = csv_matrix_to_state_table(
@@ -193,6 +194,7 @@ def run_score(args: argparse.Namespace) -> None:
         extra_obsm=parse_extra_obsm_specs(args.extra_obsm),
         max_extra_features_per_obsm=args.max_extra_features_per_obsm,
         extra_feature_selection=args.extra_feature_selection,
+        extra_feature_metadata_csv=args.extra_feature_metadata_csv,
     )
     frame.to_csv(out_dir / "derived_state_scores.csv", index=False)
     manifest.to_csv(out_dir / "derived_state_manifest.csv", index=False)
@@ -219,6 +221,7 @@ def run_train_reference(args: argparse.Namespace) -> None:
         dataset_name=args.dataset_name,
         batch_col=args.batch_col,
         interaction_mode=args.interaction_mode,
+        extra_feature_metadata_csv=args.extra_feature_metadata_csv,
     )
     print("Saved reference virtual KO model:")
     print(f"  model: {args.output_model}")
@@ -242,6 +245,7 @@ def run_apply_reference(args: argparse.Namespace) -> None:
         batch_col=args.batch_col,
         uncertainty_method=args.uncertainty_method,
         uncertainty_scale=args.uncertainty_scale,
+        extra_feature_metadata_csv=args.extra_feature_metadata_csv,
     )
     print("Applied reference virtual KO model:")
     print(f"  virtual cells: {args.out_dir}\\applied_virtual_cells.csv")
@@ -371,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     raw.add_argument("--extra-obsm", default=None, help="Comma-separated extra obsm specs, e.g. protein:protein,atac:atac. Supersedes --protein-obsm for new workflows.")
     raw.add_argument("--max-extra-features-per-obsm", type=int, default=None, help="Optional cap for each extra obsm modality, useful for large chromVAR/motif/peak matrices.")
     raw.add_argument("--extra-feature-selection", choices=["variance", "ko_effect", "hybrid", "atac_peak"], default="variance", help="How to choose capped extra obsm features. Use atac_peak for sparse raw peak/count matrices.")
+    raw.add_argument("--extra-feature-metadata-csv", default=None, help="Optional feature annotation CSV for extra obsm features, e.g. peak-gene linkage or motif-to-peak scores.")
     raw.add_argument("--calibrate", choices=["auto", "none", "global_scale", "feature_scale"], default="auto")
     raw.add_argument("--shape-calibrate", choices=["none", "variance", "quantile"], default="none", help="Optional distribution-shape calibration. Use variance or quantile for sparse ATAC/peak features.")
     raw.add_argument("--max-cells-per-state", type=int, default=180)
@@ -386,6 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--extra-obsm", default=None, help="Comma-separated extra obsm specs, e.g. protein:protein,atac:atac.")
     score.add_argument("--max-extra-features-per-obsm", type=int, default=None, help="Optional cap for each extra obsm modality.")
     score.add_argument("--extra-feature-selection", choices=["variance", "ko_effect", "hybrid", "atac_peak"], default="variance", help="Feature selection for extra obsm. Without KO labels, KO-effect methods fall back toward unsupervised scores.")
+    score.add_argument("--extra-feature-metadata-csv", default=None, help="Optional feature annotation CSV for extra obsm features.")
     score.set_defaults(func=run_score)
     train_ref = sub.add_parser("train-reference", help="Train and save a reference KO-delta model from perturbation data.")
     train_ref.add_argument("--input-h5ad", default=None, help="Perturbation h5ad with RNA matrix and KO labels.")
@@ -400,6 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_ref.add_argument("--extra-obsm", default=None, help="Comma-separated extra obsm specs, e.g. protein:protein,atac:atac.")
     train_ref.add_argument("--max-extra-features-per-obsm", type=int, default=None, help="Optional cap for each extra obsm modality during reference training.")
     train_ref.add_argument("--extra-feature-selection", choices=["variance", "ko_effect", "hybrid", "atac_peak"], default="variance", help="How to choose capped extra obsm features during reference training.")
+    train_ref.add_argument("--extra-feature-metadata-csv", default=None, help="Optional feature annotation CSV for peak-gene linkage, motif-to-peak, marker, or regulatory prior weights.")
     train_ref.add_argument("--batch-col", default=None, help="Optional obs/state CSV batch/sample/donor column. Control cells are used to remove batch-specific baseline offsets.")
     train_ref.add_argument("--interaction-mode", choices=["auto", "on", "off"], default="auto", help="Train a double-KO interaction residual model when single- and double-KO labels are available.")
     train_ref.set_defaults(func=run_train_reference)
@@ -414,6 +421,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply_ref.add_argument("--max-cells", type=int, default=800)
     apply_ref.add_argument("--cell-type-col", default=None, help="Optional obs/state CSV column for cell-type stratified prediction-only outputs.")
     apply_ref.add_argument("--batch-col", default=None, help="Optional obs/state CSV batch/sample/donor column for batch-composition output.")
+    apply_ref.add_argument("--extra-feature-metadata-csv", default=None, help="Optional feature annotation CSV for extra obsm features; defaults to the path stored in the reference model when available.")
     apply_ref.add_argument("--uncertainty-method", choices=["none", "hard-residual", "vae", "flow", "diffusion"], default="none", help="Optional hard-constrained uncertainty band. VAE/flow/diffusion currently share the same hard residual anchor unless a custom generator is plugged in.")
     apply_ref.add_argument("--uncertainty-scale", type=float, default=0.25, help="Width multiplier for the hard-constrained residual uncertainty band.")
     apply_ref.add_argument("--seed", type=int, default=7)

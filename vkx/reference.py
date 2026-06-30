@@ -26,6 +26,7 @@ from .preprocess import (
     append_extra_obsm_scores,
     compute_pathway_scores,
     h5ad_to_state_scores_with_terms,
+    load_extra_feature_metadata,
     select_pathway_terms,
 )
 from .visualization import setup_plot, wrap_label
@@ -88,6 +89,7 @@ def _load_training_state_from_h5ad(
     max_extra_features_per_obsm: int | None = None,
     extra_feature_selection: str = "variance",
     obs_columns: list[str] | None = None,
+    extra_feature_metadata_csv: str | Path | None = None,
 ) -> tuple[pd.DataFrame, list[dict]]:
     adata = ad.read_h5ad(input_h5ad)
     if ko_col not in adata.obs:
@@ -110,6 +112,7 @@ def _load_training_state_from_h5ad(
             max_features_per_obsm=max_extra_features_per_obsm,
             feature_selection=extra_feature_selection,
             labels=adata.obs[ko_col].astype(str),
+            feature_metadata=load_extra_feature_metadata(extra_feature_metadata_csv),
         )
     return frame, _serialize_state_terms(state_terms)
 
@@ -214,6 +217,7 @@ def train_reference_model(
     dataset_name: str = "reference perturbation dataset",
     batch_col: str | None = None,
     interaction_mode: str = "auto",
+    extra_feature_metadata_csv: str | Path | None = None,
 ) -> dict:
     if input_h5ad:
         frame, state_terms = _load_training_state_from_h5ad(
@@ -227,6 +231,7 @@ def train_reference_model(
             max_extra_features_per_obsm,
             extra_feature_selection,
             obs_columns=[batch_col] if batch_col else None,
+            extra_feature_metadata_csv=extra_feature_metadata_csv,
         )
         input_kind = "h5ad"
     elif state_csv:
@@ -297,6 +302,7 @@ def train_reference_model(
         "extra_obsm": extra_obsm or [],
         "max_extra_features_per_obsm": max_extra_features_per_obsm,
         "extra_feature_selection": extra_feature_selection,
+        "extra_feature_metadata_csv": str(extra_feature_metadata_csv) if extra_feature_metadata_csv else None,
         "max_pathways": max_pathways,
         "batch_col": batch_col,
         "batch_summary": batch_summary.to_dict(orient="records"),
@@ -346,6 +352,7 @@ def _write_reference_metadata(reference: dict, output_model: Path) -> None:
         "extra_obsm": reference.get("extra_obsm", []),
         "max_extra_features_per_obsm": reference.get("max_extra_features_per_obsm"),
         "extra_feature_selection": reference.get("extra_feature_selection"),
+        "extra_feature_metadata_csv": reference.get("extra_feature_metadata_csv"),
         "batch_col": reference.get("batch_col"),
         "batch_summary": reference.get("batch_summary", []),
         "interaction_status": reference.get("interaction_status"),
@@ -497,6 +504,7 @@ def apply_reference_model(
     batch_col: str | None = None,
     uncertainty_method: str = "none",
     uncertainty_scale: float = 0.25,
+    extra_feature_metadata_csv: str | Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     reference = load_reference_model(reference_model)
     out_dir = Path(out_dir)
@@ -511,6 +519,7 @@ def apply_reference_model(
             max_extra_features_per_obsm=reference.get("max_extra_features_per_obsm"),
             extra_feature_selection=reference.get("extra_feature_selection", "variance"),
             obs_columns=[col for col in [cell_type_col, batch_col] if col],
+            extra_feature_metadata_csv=extra_feature_metadata_csv or reference.get("extra_feature_metadata_csv"),
         )
     elif state_csv:
         frame = pd.read_csv(state_csv)

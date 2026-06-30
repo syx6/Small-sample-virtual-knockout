@@ -1,6 +1,6 @@
 # 2026-06-30 模型增强说明：reference、双敲、batch、三模态与 ATAC peak
 
-本次更新把之前分散在实验脚本里的几个能力，进一步接入主软件接口。核心目标是：用户不需要理解内部脚本，也能用统一命令完成 reference model 训练、普通 10X/多模态数据应用、双敲预测和可视化输出。
+本次更新把之前分散在实验脚本里的几个能力进一步接入主软件接口。核心目标是：用户不需要理解内部脚本，也能用统一命令完成 reference model 训练、普通 10X/多模态数据应用、双敲预测和可视化输出。
 
 ## 1. Interaction residual 已接入 reference model
 
@@ -132,6 +132,7 @@ python -m vkx.cli train-reference \
   --ko-col ko_target \
   --extra-obsm protein:protein,chromvar:tf,peak:peak \
   --extra-feature-selection atac_peak \
+  --extra-feature-metadata-csv peak_annotation.csv \
   --max-extra-features-per-obsm 500 \
   --output-model results/trimodal_reference.pkl
 ```
@@ -149,7 +150,24 @@ python -m vkx.cli apply-reference \
 
 注意：无 KO 标签时，软件不会报告真实准确率、AUC、R2 或 MAE；只能报告 predicted state shift、PCA/UMAP 类状态变化图、prior coverage、transfer confidence 和 uncertainty band。
 
-## 5. ATAC raw peak count 支持增强
+## 5. 公开 benchmark 边界
+
+目前公开数据可以分成四类：
+
+| 数据类型 | perturbation label | RNA | ADT/protein | ATAC | 用途 |
+|---|---:|---:|---:|---:|---|
+| Multiome Perturb-seq / MultiPerturb-seq | yes | yes | no | yes | RNA+ATAC labelled benchmark |
+| Perturb-CITE-seq / ECCITE-seq | yes | yes | yes | no | RNA+ADT labelled benchmark |
+| Perturb-ATAC / scPerturb ATAC | yes | partial/no | no | yes | ATAC regulatory benchmark |
+| DOGMA-seq / TEA-seq | usually no | yes | yes | yes | 三模态输入兼容和 reference application |
+
+因此当前不能把 DOGMA/TEA-seq 当作准确性验证，也不能声称已经有公开 RNA+ADT+ATAC+CRISPR 同细胞完整 benchmark。更详细的公开数据清单见：
+
+```text
+docs/public_multimodal_perturbation_benchmark_registry_2026_06_30.md
+```
+
+## 6. ATAC raw peak count 与 peak annotation
 
 新增 `extra-feature-selection=atac_peak`。
 
@@ -158,7 +176,22 @@ python -m vkx.cli apply-reference \
 - 结合 peak 方差；
 - 结合 control vs KO 的 peak effect；
 - 结合开放比例，避免只选全局开放或几乎全关闭的 peak；
-- 为后续 motif-to-peak、peak-gene linkage 和 marker peak 加权留下接口。
+- 结合外部 peak annotation 权重，例如 peak-gene linkage、motif-to-peak、marker peak 和 regulatory prior。
+
+新增 `--extra-feature-metadata-csv` 后，可以直接接收外部 peak annotation 表。推荐列名：
+
+```text
+obsm_key
+feature_index
+feature_name 或 peak
+target_gene
+peak_gene_link_score
+motif_to_peak_score
+marker_score
+regulatory_prior_score
+```
+
+这些列会写入 `derived_state_manifest.csv`。其中 `peak_gene_link_score`、`motif_to_peak_score`、`marker_score` 和 `regulatory_prior_score` 会参与 `atac_peak` feature selection。
 
 推荐：
 
@@ -168,6 +201,7 @@ python -m vkx.cli run \
   --ko-col ko_target \
   --extra-obsm peak:peak,chromvar:tf \
   --extra-feature-selection atac_peak \
+  --extra-feature-metadata-csv peak_annotation.csv \
   --shape-calibrate quantile \
   --target-kos KDM6A \
   --out-dir results/atac_peak_virtual_ko
@@ -180,8 +214,8 @@ python -m vkx.cli run \
 
 这样可以同时处理平均方向、开放比例和分位数形状。
 
-## 6. 当前仍需继续补齐的部分
+## 7. 仍需继续补齐
 
-- 真正公开 RNA+ADT+ATAC 且带 perturbation 标签的数据集仍需要单独确认和下载；无标签 DOGMA/TEA-seq 不能当准确性 benchmark。
-- motif-to-peak annotation 和 peak-gene linkage 目前已有选择器接口，下一步需要接收外部 peak annotation 表并把权重写入 feature metadata。
+- 真正公开 RNA+ADT+ATAC 且带 perturbation 标签的数据集仍未确认；找到后再升级为 full trimodal labelled benchmark。
+- motif-to-peak annotation 和 peak-gene linkage 已经可以通过 `--extra-feature-metadata-csv` 输入并写入 feature metadata；下一步是开发自动生成 annotation 表的辅助脚本。
 - VAE / flow matching / diffusion 入口已保留，但当前仍采用 hard residual uncertainty band；真正 neural generator 需要在有更多同类型 perturbation 数据后再训练。

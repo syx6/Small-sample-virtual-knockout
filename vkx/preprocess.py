@@ -122,6 +122,96 @@ def _obsm_names(adata: ad.AnnData, obsm_key: str) -> list[str]:
     return [f"{obsm_key}_{i + 1}" for i in range(matrix.shape[1])]
 
 
+def load_extra_feature_metadata(path: str | Path | None) -> pd.DataFrame | None:
+    if not path:
+        return None
+    table = pd.read_csv(path)
+    required_any = {"feature_index", "feature_name", "peak", "name", "raw_feature_name"}
+    if "obsm_key" not in table.columns:
+        raise ValueError("Feature metadata must contain an 'obsm_key' column.")
+    if not required_any & set(table.columns):
+        raise ValueError("Feature metadata must contain one of: feature_index, feature_name, peak, name, raw_feature_name.")
+    return table
+
+
+def _metadata_prior_score(metadata: pd.DataFrame | None, obsm_key: str, names: list[str], n_features: int) -> np.ndarray | None:
+    if metadata is None or metadata.empty:
+        return None
+    sub = metadata.loc[metadata["obsm_key"].astype(str) == str(obsm_key)].copy()
+    if sub.empty:
+        return None
+    score = np.zeros(n_features, dtype=float)
+    weight_cols = [
+        "regulatory_prior_score",
+        "peak_gene_link_score",
+        "motif_to_peak_score",
+        "marker_score",
+        "tf_target_score",
+        "locus_score",
+    ]
+    available = [col for col in weight_cols if col in sub.columns and pd.api.types.is_numeric_dtype(sub[col])]
+    if not available:
+        return None
+    name_to_idx = {str(name): i for i, name in enumerate(names)}
+    for _, row in sub.iterrows():
+        idx = None
+        if "feature_index" in row and pd.notna(row["feature_index"]):
+            candidate = int(row["feature_index"])
+            idx = candidate if 0 <= candidate < n_features else candidate - 1 if 1 <= candidate <= n_features else None
+        if idx is None:
+            for col in ["feature_name", "raw_feature_name", "peak", "name"]:
+                if col in row and pd.notna(row[col]) and str(row[col]) in name_to_idx:
+                    idx = name_to_idx[str(row[col])]
+                    break
+        if idx is None or idx < 0 or idx >= n_features:
+            continue
+        score[idx] = max(score[idx], float(np.nanmean([row[col] for col in available if pd.notna(row[col])])))
+    return score
+
+
+def _selected_obsm_metadata(
+    metadata: pd.DataFrame | None,
+    obsm_key: str,
+    prefix: str,
+    names: list[str],
+    keep: np.ndarray,
+    cols: list[str],
+) -> pd.DataFrame:
+    rows = []
+    sub = pd.DataFrame()
+    if metadata is not None and not metadata.empty:
+        sub = metadata.loc[metadata["obsm_key"].astype(str) == str(obsm_key)].copy()
+    for feature_index, state_feature in zip(keep, cols):
+        raw = names[int(feature_index)] if int(feature_index) < len(names) else f"{obsm_key}_{int(feature_index) + 1}"
+        row = {
+            "state_feature": state_feature,
+            "source": f"obsm:{obsm_key}",
+            "n_genes_used": np.nan,
+            "obsm_key": obsm_key,
+            "feature_index": int(feature_index),
+            "raw_feature_name": raw,
+            "feature_prefix": prefix,
+        }
+        if not sub.empty:
+            hit = pd.DataFrame()
+            if "feature_index" in sub.columns:
+                zero_based = sub.loc[pd.to_numeric(sub["feature_index"], errors="coerce") == int(feature_index)]
+                one_based = sub.loc[pd.to_numeric(sub["feature_index"], errors="coerce") == int(feature_index) + 1]
+                hit = pd.concat([zero_based, one_based]).head(1)
+            if hit.empty:
+                for col in ["feature_name", "raw_feature_name", "peak", "name"]:
+                    if col in sub.columns:
+                        hit = sub.loc[sub[col].astype(str) == raw].head(1)
+                        if not hit.empty:
+                            break
+            if not hit.empty:
+                for col, value in hit.iloc[0].items():
+                    if col not in row:
+                        row[col] = value
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def _scaled_rank(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, dtype=float)
     if values.size == 0:
@@ -159,6 +249,7 @@ def select_obsm_feature_indices(
     max_features: int | None,
     selection: str = "variance",
     labels: pd.Series | None = None,
+    metadata_score: np.ndarray | None = None,
 ) -> np.ndarray:
     keep = np.arange(values.shape[1])
     if max_features is None or max_features <= 0 or values.shape[1] <= max_features:
@@ -182,6 +273,8 @@ def select_obsm_feature_indices(
             score = 0.55 * _scaled_rank(variance) + 0.45 * _scaled_rank(sparse_window)
         else:
             score = 0.35 * _scaled_rank(variance) + 0.40 * _scaled_rank(effect) + 0.25 * _scaled_rank(sparse_window)
+        if metadata_score is not None:
+            score = 0.70 * _scaled_rank(score) + 0.30 * _scaled_rank(metadata_score)
     else:
         score = variance
     return np.sort(np.argsort(np.nan_to_num(score, nan=-np.inf))[::-1][:max_features])
@@ -195,12 +288,15 @@ def append_obsm_scores(
     max_features: int | None = None,
     feature_selection: str = "variance",
     labels: pd.Series | None = None,
+    feature_metadata: pd.DataFrame | None = None,
+    selected_metadata: list[pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     if obsm_key not in adata.obsm:
         raise ValueError(f"obsm key '{obsm_key}' was not found. Available keys: {list(adata.obsm.keys())}")
     values = np.asarray(adata.obsm[obsm_key], dtype=float)
     names = _obsm_names(adata, obsm_key)
-    keep = select_obsm_feature_indices(values, max_features, selection=feature_selection, labels=labels)
+    metadata_score = _metadata_prior_score(feature_metadata, obsm_key, names, values.shape[1])
+    keep = select_obsm_feature_indices(values, max_features, selection=feature_selection, labels=labels, metadata_score=metadata_score)
     cols = []
     seen = set(frame.columns)
     for i in keep:
@@ -214,6 +310,8 @@ def append_obsm_scores(
         seen.add(col)
         cols.append(col)
     extra = pd.DataFrame(values[:, keep], columns=cols, index=frame.index)
+    if selected_metadata is not None:
+        selected_metadata.append(_selected_obsm_metadata(feature_metadata, obsm_key, prefix, names, keep, cols))
     return pd.concat([frame, extra], axis=1).copy()
 
 
@@ -224,6 +322,8 @@ def append_extra_obsm_scores(
     max_features_per_obsm: int | None = None,
     feature_selection: str = "variance",
     labels: pd.Series | None = None,
+    feature_metadata: pd.DataFrame | None = None,
+    selected_metadata: list[pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     seen = set()
     for obsm_key, prefix in extra_obsm:
@@ -238,11 +338,21 @@ def append_extra_obsm_scores(
             max_features=max_features_per_obsm,
             feature_selection=feature_selection,
             labels=labels,
+            feature_metadata=feature_metadata,
+            selected_metadata=selected_metadata,
         )
     return frame
 
 
-def extra_obsm_manifest(frame: pd.DataFrame, extra_obsm: list[tuple[str, str]]) -> pd.DataFrame:
+def extra_obsm_manifest(
+    frame: pd.DataFrame,
+    extra_obsm: list[tuple[str, str]],
+    selected_metadata: list[pd.DataFrame] | None = None,
+) -> pd.DataFrame:
+    if selected_metadata:
+        rows = [item for item in selected_metadata if item is not None and not item.empty]
+        if rows:
+            return pd.concat(rows, ignore_index=True)
     rows = []
     seen = set()
     for obsm_key, prefix in extra_obsm:
@@ -264,6 +374,7 @@ def h5ad_to_state_table(
     extra_obsm: list[tuple[str, str]] | None = None,
     max_extra_features_per_obsm: int | None = None,
     extra_feature_selection: str = "variance",
+    extra_feature_metadata_csv: str | Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     adata = ad.read_h5ad(input_h5ad)
     if ko_col not in adata.obs:
@@ -277,6 +388,8 @@ def h5ad_to_state_table(
     extra = list(extra_obsm or [])
     if protein_obsm:
         extra.append((protein_obsm, protein_prefix))
+    feature_metadata = load_extra_feature_metadata(extra_feature_metadata_csv)
+    selected_metadata: list[pd.DataFrame] = []
     if extra:
         frame = append_extra_obsm_scores(
             frame,
@@ -285,6 +398,8 @@ def h5ad_to_state_table(
             max_features_per_obsm=max_extra_features_per_obsm,
             feature_selection=extra_feature_selection,
             labels=adata.obs[ko_col].astype(str),
+            feature_metadata=feature_metadata,
+            selected_metadata=selected_metadata,
         )
     manifest = pd.DataFrame(
         {
@@ -294,7 +409,7 @@ def h5ad_to_state_table(
         }
     )
     if extra:
-        manifest = pd.concat([manifest, extra_obsm_manifest(frame, extra)], ignore_index=True)
+        manifest = pd.concat([manifest, extra_obsm_manifest(frame, extra, selected_metadata)], ignore_index=True)
     return frame, manifest
 
 
@@ -307,6 +422,7 @@ def h5ad_to_state_scores(
     extra_obsm: list[tuple[str, str]] | None = None,
     max_extra_features_per_obsm: int | None = None,
     extra_feature_selection: str = "variance",
+    extra_feature_metadata_csv: str | Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     adata = ad.read_h5ad(input_h5ad)
     terms = select_pathway_terms(adata, prior_dir, max_terms=max_pathways)
@@ -317,6 +433,8 @@ def h5ad_to_state_scores(
     extra = list(extra_obsm or [])
     if protein_obsm:
         extra.append((protein_obsm, protein_prefix))
+    feature_metadata = load_extra_feature_metadata(extra_feature_metadata_csv)
+    selected_metadata: list[pd.DataFrame] = []
     if extra:
         frame = append_extra_obsm_scores(
             frame,
@@ -325,6 +443,8 @@ def h5ad_to_state_scores(
             max_features_per_obsm=max_extra_features_per_obsm,
             feature_selection=extra_feature_selection,
             labels=None,
+            feature_metadata=feature_metadata,
+            selected_metadata=selected_metadata,
         )
     manifest = pd.DataFrame(
         {
@@ -334,7 +454,7 @@ def h5ad_to_state_scores(
         }
     )
     if extra:
-        manifest = pd.concat([manifest, extra_obsm_manifest(frame, extra)], ignore_index=True)
+        manifest = pd.concat([manifest, extra_obsm_manifest(frame, extra, selected_metadata)], ignore_index=True)
     return frame, manifest
 
 
@@ -347,6 +467,7 @@ def h5ad_to_state_scores_with_terms(
     max_extra_features_per_obsm: int | None = None,
     extra_feature_selection: str = "variance",
     obs_columns: list[str] | None = None,
+    extra_feature_metadata_csv: str | Path | None = None,
 ) -> pd.DataFrame:
     adata = ad.read_h5ad(input_h5ad)
     frame = compute_pathway_scores_from_saved_terms(adata, terms)
@@ -357,6 +478,7 @@ def h5ad_to_state_scores_with_terms(
     extra = list(extra_obsm or [])
     if protein_obsm:
         extra.append((protein_obsm, protein_prefix))
+    feature_metadata = load_extra_feature_metadata(extra_feature_metadata_csv)
     if extra:
         frame = append_extra_obsm_scores(
             frame,
@@ -365,6 +487,7 @@ def h5ad_to_state_scores_with_terms(
             max_features_per_obsm=max_extra_features_per_obsm,
             feature_selection=extra_feature_selection,
             labels=None,
+            feature_metadata=feature_metadata,
         )
     return frame
 
