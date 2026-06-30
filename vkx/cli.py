@@ -9,6 +9,7 @@ from .benchmark import public_benchmark_registry, validate_multimodal_benchmark
 from .cards import make_ko_summary_cards
 from .comparison import make_method_comparison
 from .core import run_virtual_ko
+from .figure_pack import make_figure_package
 from .importers import import_single_cell_data, write_import_outputs
 from .interaction import run_double_interaction
 from .multiome import assemble_multiome_benchmark
@@ -36,6 +37,23 @@ def target_labels(args: argparse.Namespace) -> list[str]:
     return parse_holdouts(value)
 
 
+def _auto_make_cards(out_dir: Path, delta_name: str, auc_name: str | None = None, confidence_name: str | None = None) -> None:
+    delta_csv = out_dir / delta_name
+    if not delta_csv.exists():
+        return
+    auc_csv = out_dir / auc_name if auc_name and (out_dir / auc_name).exists() else None
+    confidence_csv = out_dir / confidence_name if confidence_name and (out_dir / confidence_name).exists() else None
+    try:
+        make_ko_summary_cards(
+            delta_csv=delta_csv,
+            out_dir=out_dir / "ko_cards",
+            auc_csv=auc_csv,
+            confidence_csv=confidence_csv,
+        )
+    except Exception as exc:
+        print(f"  note: KO summary cards were skipped: {exc}")
+
+
 def run_fit(args: argparse.Namespace) -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -61,6 +79,7 @@ def run_fit(args: argparse.Namespace) -> None:
     result.auc_points.to_csv(out_dir / "auc_points.csv", index=False)
     result.calibration.to_csv(out_dir / "calibration.csv", index=False)
     auc_summary = make_all_plots(result.summary, result.delta_table, result.virtual_cells, result.auc_points, out_dir)
+    _auto_make_cards(out_dir, "delta_table.csv", auc_name="auc_summary.csv")
     print("Saved reusable virtual KO outputs:")
     print(f"  report: {out_dir / 'report.md'}")
     print(f"  summary: {out_dir / 'summary.csv'}")
@@ -143,6 +162,15 @@ def run_ko_cards(args: argparse.Namespace) -> None:
     print(f"  index: {args.out_dir}\\ko_summary_cards_index.csv")
     print(f"  report: {args.out_dir}\\ko_summary_cards_report.md")
     print(f"  cards: {len(index)}")
+
+
+def run_figure_package(args: argparse.Namespace) -> None:
+    index = make_figure_package(args.result_dir, args.out_dir)
+    out = Path(args.out_dir) if args.out_dir else Path(args.result_dir) / "figure_package"
+    print("Saved figure package:")
+    print(f"  report: {out}\\figure_package_report.md")
+    print(f"  index: {out}\\figure_index.csv")
+    print(f"  figures: {len(index)}")
 
 
 def run_assemble_multiome(args: argparse.Namespace) -> None:
@@ -286,6 +314,7 @@ def run_from_raw(args: argparse.Namespace) -> None:
     result.auc_points.to_csv(out_dir / "auc_points.csv", index=False)
     result.calibration.to_csv(out_dir / "calibration.csv", index=False)
     auc_summary = make_all_plots(result.summary, result.delta_table, result.virtual_cells, result.auc_points, out_dir)
+    _auto_make_cards(out_dir, "delta_table.csv", auc_name="auc_summary.csv")
     print("Saved raw-matrix virtual KO outputs:")
     print(f"  derived state scores: {state_csv}")
     print(f"  report: {out_dir / 'report.md'}")
@@ -369,6 +398,7 @@ def run_apply_reference(args: argparse.Namespace) -> None:
     print(f"  n cells rows: {len(cells)}")
     print(f"  n target KO: {len(deltas)}")
     write_analysis_mode(Path(args.out_dir), "prediction_only", "A saved perturbation reference model was applied to input cells. Without matching real KO labels in this input dataset, AUC/R2/MAE accuracy metrics are not computed.")
+    _auto_make_cards(Path(args.out_dir), "predicted_ko_delta.csv", confidence_name="transfer_confidence.csv")
 
 
 def run_inspect_reference(args: argparse.Namespace) -> None:
@@ -462,6 +492,10 @@ def build_parser() -> argparse.ArgumentParser:
     cards.add_argument("--max-features", type=int, default=8)
     cards.add_argument("--out-dir", default="results/ko_summary_cards")
     cards.set_defaults(func=run_ko_cards)
+    figures = sub.add_parser("figure-package", help="Collect generated PNG figures into one readable figure package with explanations.")
+    figures.add_argument("--result-dir", required=True, help="Existing result directory to scan.")
+    figures.add_argument("--out-dir", default=None, help="Output directory. Default: result-dir/figure_package.")
+    figures.set_defaults(func=run_figure_package)
     multiome = sub.add_parser("assemble-multiome", help="Assemble RNA and ATAC matrices plus KO metadata into one benchmark-ready h5ad.")
     multiome.add_argument("--rna-input", required=True)
     multiome.add_argument("--rna-format", required=True, choices=["h5ad", "10x_mtx", "10x_h5"])

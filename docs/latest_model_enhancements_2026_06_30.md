@@ -267,6 +267,25 @@ python -m vkx.cli ko-cards \
 - `ko_summary_cards_report.md`
 - `ko_card_<KO>.png`
 
+`run`、`fit` 和 `apply-reference` 现在会自动尝试生成 `ko_cards/`。如果环境缺少绘图库，主分析不会中断，仍会保留 CSV 和 report。
+
+## 5.4 Figure package
+
+新增 `figure-package`，用于把一个结果目录中的关键 PNG 图自动整理成图文报告：
+
+```bash
+python -m vkx.cli figure-package \
+  --result-dir results/software_interface_demo
+```
+
+输出：
+
+- `figure_package/figure_index.csv`
+- `figure_package/figure_package_report.md`
+- `figure_package/assets/*.png`
+
+这个命令适合在给别人展示结果之前运行，避免图分散在多个子目录里。
+
 ## 6. ATAC raw peak count 与 peak annotation
 
 新增 `extra-feature-selection=atac_peak`。
