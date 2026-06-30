@@ -55,6 +55,18 @@ PUBLIC_BENCHMARKS = [
         "url": "https://www.omicsdi.org/dataset/biostudies-literature/S-EPMC9219143",
         "notes": "Do not report true accuracy, AUC, R2, or MAE unless real perturbation labels are present.",
     },
+    {
+        "dataset": "Full RNA+ADT+ATAC+perturbation benchmark",
+        "status": "not_confirmed_public",
+        "rna": True,
+        "adt": True,
+        "atac": True,
+        "perturbation_labels": True,
+        "recommended_use": "Not yet enabled as a full trimodal labelled benchmark",
+        "accession": "not confirmed",
+        "url": "not confirmed",
+        "notes": "As of the current registry, no public dataset has been confirmed to provide RNA, ADT/protein, ATAC, and real genetic perturbation labels in the same benchmark-ready cells. Upgrade only after manual verification of all four requirements.",
+    },
 ]
 
 
@@ -100,6 +112,7 @@ This registry separates true labelled benchmarks from prediction-only multiome a
 - Labelled RNA+ADT perturbation benchmark: use Perturb-CITE-seq / ECCITE-seq.
 - ATAC regulatory benchmark: use Perturb-ATAC / scPerturb ATAC.
 - RNA+ADT+ATAC without perturbation labels: use only for input compatibility and reference application.
+- Full RNA+ADT+ATAC+genetic perturbation benchmark: not confirmed yet; do not claim full trimodal labelled validation until all four requirements are verified in the same cells.
 
 ## Registry
 

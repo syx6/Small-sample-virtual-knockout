@@ -175,6 +175,7 @@ python -m vkx.cli apply-reference \
 | Perturb-CITE-seq / ECCITE-seq | yes | yes | yes | no | RNA+ADT labelled benchmark |
 | Perturb-ATAC / scPerturb ATAC | yes | partial/no | no | yes | ATAC regulatory benchmark |
 | DOGMA-seq / TEA-seq | usually no | yes | yes | yes | 三模态输入兼容和 reference application |
+| Full RNA+ADT+ATAC+genetic perturbation benchmark | not confirmed | yes | yes | yes | `not_confirmed_public`，暂不启用准确性 benchmark |
 
 因此当前不能把 DOGMA/TEA-seq 当作准确性验证，也不能声称已经有公开 RNA+ADT+ATAC+CRISPR 同细胞完整 benchmark。更详细的公开数据清单见：
 
@@ -315,7 +316,7 @@ python -m vkx.cli run \
 
 ## 7. 仍需继续补齐
 
-- 真正公开 RNA+ADT+ATAC 且带 perturbation 标签的数据集仍未确认；找到后再升级为 full trimodal labelled benchmark。
+- 真正公开 RNA+ADT+ATAC 且带 genetic perturbation 标签的数据集已在 registry 中显式标记为 `not_confirmed_public`；找到并人工确认后再升级为 full trimodal labelled benchmark。
 - motif-to-peak annotation 和 peak-gene linkage 已经可以通过 `--extra-feature-metadata-csv` 输入并写入 feature metadata；下一步是开发自动生成 annotation 表的辅助脚本。
 - 已新增 `make-gene-tss`、`standardize-peak-scores`、`annotate-peaks` 和一键式 `build-peak-annotation`，可以从 GTF、motif hits、marker peaks 自动生成基础 peak annotation 表与 QC 图；下一步可以继续接 Ensembl/GENCODE 自动下载和更具体的 motif scanner 输出格式转换。
 - VAE / flow matching / diffusion 入口现在会生成 hard-constrained uncertainty virtual cells；没有可用神经网络后端时会自动回退到 empirical residual bank，并在 `generator_report.md` 中说明。
