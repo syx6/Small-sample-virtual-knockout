@@ -10,7 +10,7 @@ from .core import run_virtual_ko
 from .importers import import_single_cell_data, write_import_outputs
 from .interaction import run_double_interaction
 from .multiome import assemble_multiome_benchmark
-from .peak_annotation import annotate_peaks, make_gene_tss_from_gtf, standardize_peak_score_table
+from .peak_annotation import annotate_peaks, build_peak_annotation_pipeline, make_gene_tss_from_gtf, standardize_peak_score_table
 from .preprocess import csv_matrix_to_state_table, h5ad_to_state_scores, h5ad_to_state_table, parse_extra_obsm_specs
 from .reference import apply_reference_model, inspect_reference_model, train_reference_model
 from .visualization import make_all_plots
@@ -169,6 +169,28 @@ def run_standardize_peak_scores(args: argparse.Namespace) -> None:
     print("Standardized peak score table:")
     print(f"  output CSV: {args.out_csv}")
     print(f"  rows: {len(table)}")
+
+
+def run_build_peak_annotation(args: argparse.Namespace) -> None:
+    table = build_peak_annotation_pipeline(
+        out_csv=args.out_csv,
+        input_h5ad=args.input_h5ad,
+        obsm_key=args.obsm_key,
+        feature_names_csv=args.feature_names_csv,
+        gtf=args.gtf,
+        gene_tss_csv=args.gene_tss_csv,
+        raw_motif_hits_csv=args.raw_motif_hits_csv,
+        motif_hits_csv=args.motif_hits_csv,
+        raw_marker_peaks_csv=args.raw_marker_peaks_csv,
+        marker_peaks_csv=args.marker_peaks_csv,
+        target_genes=args.target_genes,
+        max_distance=args.max_distance,
+    )
+    print("Built peak annotation workflow outputs:")
+    print(f"  annotation CSV: {args.out_csv}")
+    print(f"  report: {Path(args.out_csv).with_suffix('.report.md')}")
+    print(f"  summary figure: {Path(args.out_csv).with_suffix('.summary.png')}")
+    print(f"  features: {len(table)}")
 
 
 def run_from_raw(args: argparse.Namespace) -> None:
@@ -416,6 +438,20 @@ def build_parser() -> argparse.ArgumentParser:
     peak_scores.add_argument("--score-col", default=None, help="Column containing motif/marker score. Auto-detected when omitted.")
     peak_scores.add_argument("--tf-col", default=None, help="Optional TF/motif/gene column.")
     peak_scores.set_defaults(func=run_standardize_peak_scores)
+    peak_pipeline = sub.add_parser("build-peak-annotation", help="Run the full helper workflow to create peak_annotation.csv from GTF, motif hits, marker peaks, and peak names.")
+    peak_pipeline.add_argument("--input-h5ad", default=None, help="h5ad containing peak-level features in obsm.")
+    peak_pipeline.add_argument("--obsm-key", default="peak")
+    peak_pipeline.add_argument("--feature-names-csv", default=None, help="Optional CSV with feature_name/peak/name.")
+    peak_pipeline.add_argument("--gtf", default=None, help="Optional GTF used to build gene_tss.csv.")
+    peak_pipeline.add_argument("--gene-tss-csv", default=None, help="Optional precomputed gene_tss.csv.")
+    peak_pipeline.add_argument("--raw-motif-hits-csv", default=None, help="Optional raw motif hit table to standardize.")
+    peak_pipeline.add_argument("--motif-hits-csv", default=None, help="Optional already standardized motif-to-peak CSV.")
+    peak_pipeline.add_argument("--raw-marker-peaks-csv", default=None, help="Optional raw marker peak table to standardize.")
+    peak_pipeline.add_argument("--marker-peaks-csv", default=None, help="Optional already standardized marker peak CSV.")
+    peak_pipeline.add_argument("--target-genes", default=None)
+    peak_pipeline.add_argument("--max-distance", type=int, default=250000)
+    peak_pipeline.add_argument("--out-csv", required=True)
+    peak_pipeline.set_defaults(func=run_build_peak_annotation)
     fit = sub.add_parser("fit", help="Fit/evaluate virtual KO from a state-score CSV table.")
     fit.add_argument("--state-csv", required=True, help="CSV with one row per cell, one KO label column, and numeric state-score columns.")
     fit.add_argument("--ko-col", default="ko_target", help="Column containing control/KO labels.")

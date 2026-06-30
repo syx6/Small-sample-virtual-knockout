@@ -309,8 +309,49 @@ def annotate_peaks(
     return peaks
 
 
+def build_peak_annotation_pipeline(
+    out_csv: str | Path,
+    input_h5ad: str | Path | None = None,
+    obsm_key: str = "peak",
+    feature_names_csv: str | Path | None = None,
+    gtf: str | Path | None = None,
+    gene_tss_csv: str | Path | None = None,
+    raw_motif_hits_csv: str | Path | None = None,
+    motif_hits_csv: str | Path | None = None,
+    raw_marker_peaks_csv: str | Path | None = None,
+    marker_peaks_csv: str | Path | None = None,
+    target_genes: str | None = None,
+    max_distance: int = 250_000,
+) -> pd.DataFrame:
+    out_csv = Path(out_csv)
+    work_dir = out_csv.parent
+    work_dir.mkdir(parents=True, exist_ok=True)
+    if gene_tss_csv is None and gtf is not None:
+        gene_tss_csv = work_dir / "gene_tss.csv"
+        make_gene_tss_from_gtf(gtf, gene_tss_csv)
+    if motif_hits_csv is None and raw_motif_hits_csv is not None:
+        motif_hits_csv = work_dir / "motif_to_peak.standardized.csv"
+        standardize_peak_score_table(raw_motif_hits_csv, motif_hits_csv, table_type="motif")
+    if marker_peaks_csv is None and raw_marker_peaks_csv is not None:
+        marker_peaks_csv = work_dir / "marker_peaks.standardized.csv"
+        standardize_peak_score_table(raw_marker_peaks_csv, marker_peaks_csv, table_type="marker")
+    return annotate_peaks(
+        input_h5ad=input_h5ad,
+        obsm_key=obsm_key,
+        out_csv=out_csv,
+        feature_names_csv=feature_names_csv,
+        gene_tss_csv=gene_tss_csv,
+        motif_hits_csv=motif_hits_csv,
+        marker_peaks_csv=marker_peaks_csv,
+        target_genes=target_genes,
+        max_distance=max_distance,
+    )
+
+
 def _write_report(peaks: pd.DataFrame, out_csv: Path) -> None:
     top = peaks.sort_values("regulatory_prior_score", ascending=False).head(12)
+    figure_path = _plot_peak_annotation_summary(peaks, out_csv)
+    figure_text = f"\n![Peak annotation summary]({figure_path.name})\n" if figure_path is not None else "\nPlot was not generated because matplotlib is not available in this environment.\n"
     text = f"""# Peak Annotation Report
 
 Generated feature annotation file:
@@ -326,6 +367,10 @@ Generated feature annotation file:
 - Peaks with nonzero peak-gene score: {int((peaks['peak_gene_link_score'] > 0).sum())}
 - Peaks with nonzero motif score: {int((peaks['motif_to_peak_score'] > 0).sum())}
 - Peaks with nonzero marker score: {int((peaks['marker_score'] > 0).sum())}
+
+## QC Figure
+
+{figure_text}
 
 ## Top Regulatory Peaks
 
@@ -344,3 +389,32 @@ python -m vkx.cli train-reference \\
 ```
 """
     out_csv.with_suffix(".report.md").write_text(text, encoding="utf-8")
+
+
+def _plot_peak_annotation_summary(peaks: pd.DataFrame, out_csv: Path) -> Path | None:
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+    except Exception:
+        return None
+    if peaks.empty:
+        return None
+    plot = peaks.sort_values("regulatory_prior_score", ascending=False).head(14).copy()
+    plot["label"] = plot["feature_name"].astype(str).str.replace("chr", "", regex=False)
+    plot["label"] = plot["label"].where(plot["label"].str.len() <= 28, plot["label"].str.slice(0, 25) + "...")
+    components = ["peak_gene_link_score", "motif_to_peak_score", "marker_score", "locus_score"]
+    fig, axes = plt.subplots(1, 2, figsize=(13.5, max(5.2, 0.38 * len(plot) + 2.5)), constrained_layout=True)
+    sns.barplot(data=plot, x="regulatory_prior_score", y="label", color="#4C78A8", ax=axes[0])
+    axes[0].set_title("Top regulatory-prior peaks")
+    axes[0].set_xlabel("Regulatory prior score")
+    axes[0].set_ylabel("")
+    heat = plot.set_index("label")[components]
+    sns.heatmap(heat, cmap="YlGnBu", vmin=0, vmax=1, annot=True, fmt=".2f", cbar_kws={"label": "component score"}, ax=axes[1])
+    axes[1].set_title("Why these peaks were selected")
+    axes[1].set_xlabel("")
+    axes[1].set_ylabel("")
+    fig.suptitle("ATAC Peak Annotation QC", fontsize=15)
+    figure_path = out_csv.with_suffix(".summary.png")
+    fig.savefig(figure_path, bbox_inches="tight", dpi=300)
+    plt.close(fig)
+    return figure_path

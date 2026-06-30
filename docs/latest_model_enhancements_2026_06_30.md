@@ -196,6 +196,19 @@ regulatory_prior_score
 如果用户还没有 annotation 表，可以先用 `annotate-peaks` 自动生成一个基础版本：
 
 ```bash
+python -m vkx.cli build-peak-annotation \
+  --input-h5ad perturb_multiome.h5ad \
+  --obsm-key peak \
+  --gtf gencode.annotation.gtf \
+  --raw-motif-hits-csv raw_motif_hits.csv \
+  --raw-marker-peaks-csv raw_marker_peaks.csv \
+  --target-genes KDM6A,STAT1 \
+  --out-csv results/peak_annotation.csv
+```
+
+如果想分步检查，也可以这样运行：
+
+```bash
 python -m vkx.cli make-gene-tss \
   --gtf gencode.annotation.gtf \
   --out-csv results/gene_tss.csv
@@ -222,6 +235,13 @@ python -m vkx.cli annotate-peaks \
 
 其中 `gene_tss.csv` 至少包含 `gene,chrom,tss`，`motif_to_peak.csv` 和 `marker_peaks.csv` 至少包含 `peak` 或 `feature_name`。如果只有 peak 名称、没有 h5ad，也可以用 `--feature-names-csv peak_names.csv`。
 
+`annotate-peaks` 和 `build-peak-annotation` 会额外输出：
+
+- `peak_annotation.report.md`
+- `peak_annotation.summary.png`
+
+这张 summary 图会展示 top regulatory-prior peaks 以及 peak-gene、motif、marker、locus 四类证据的贡献。
+
 推荐：
 
 ```bash
@@ -247,5 +267,5 @@ python -m vkx.cli run \
 
 - 真正公开 RNA+ADT+ATAC 且带 perturbation 标签的数据集仍未确认；找到后再升级为 full trimodal labelled benchmark。
 - motif-to-peak annotation 和 peak-gene linkage 已经可以通过 `--extra-feature-metadata-csv` 输入并写入 feature metadata；下一步是开发自动生成 annotation 表的辅助脚本。
-- 已新增 `make-gene-tss`、`standardize-peak-scores` 和 `annotate-peaks`，可以从 GTF、motif hits、marker peaks 自动生成基础 peak annotation 表；下一步可以继续接 Ensembl/GENCODE 自动下载和更具体的 motif scanner 输出格式转换。
+- 已新增 `make-gene-tss`、`standardize-peak-scores`、`annotate-peaks` 和一键式 `build-peak-annotation`，可以从 GTF、motif hits、marker peaks 自动生成基础 peak annotation 表与 QC 图；下一步可以继续接 Ensembl/GENCODE 自动下载和更具体的 motif scanner 输出格式转换。
 - VAE / flow matching / diffusion 入口已保留，但当前仍采用 hard residual uncertainty band；真正 neural generator 需要在有更多同类型 perturbation 数据后再训练。
