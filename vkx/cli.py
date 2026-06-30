@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 
 from .benchmark import public_benchmark_registry, validate_multimodal_benchmark
+from .cards import make_ko_summary_cards
+from .comparison import make_method_comparison
 from .core import run_virtual_ko
 from .importers import import_single_cell_data, write_import_outputs
 from .interaction import run_double_interaction
@@ -115,6 +117,32 @@ def run_workflow_template(args: argparse.Namespace) -> None:
     path = write_workflow_template(args.mode, args.out_dir)
     print("Saved workflow template:")
     print(f"  template: {path}")
+
+
+def run_method_comparison(args: argparse.Namespace) -> None:
+    metrics = [item.strip() for item in (args.metric_csv or "").split(",") if item.strip()]
+    result = make_method_comparison(metrics, args.out_dir)
+    print("Saved method comparison outputs:")
+    print(f"  registry: {args.out_dir}\\method_registry.csv")
+    print(f"  report: {args.out_dir}\\method_comparison_report.md")
+    print(f"  method positioning figure: {args.out_dir}\\01_method_positioning.png")
+    if not result["metrics"].empty:
+        print(f"  metric comparison: {args.out_dir}\\method_metric_comparison.csv")
+        print(f"  metric figure: {args.out_dir}\\02_metric_comparison.png")
+
+
+def run_ko_cards(args: argparse.Namespace) -> None:
+    index = make_ko_summary_cards(
+        delta_csv=args.delta_csv,
+        out_dir=args.out_dir,
+        auc_csv=args.auc_csv,
+        confidence_csv=args.confidence_csv,
+        max_features=args.max_features,
+    )
+    print("Saved KO summary cards:")
+    print(f"  index: {args.out_dir}\\ko_summary_cards_index.csv")
+    print(f"  report: {args.out_dir}\\ko_summary_cards_report.md")
+    print(f"  cards: {len(index)}")
 
 
 def run_assemble_multiome(args: argparse.Namespace) -> None:
@@ -423,6 +451,17 @@ def build_parser() -> argparse.ArgumentParser:
     workflow.add_argument("--mode", choices=["all", "labelled-benchmark", "reference", "prediction-only", "atac-peak"], default="all")
     workflow.add_argument("--out-dir", default="results/workflow_template")
     workflow.set_defaults(func=run_workflow_template)
+    method_cmp = sub.add_parser("method-comparison", help="Create conceptual and empirical comparison figures against existing virtual perturbation methods.")
+    method_cmp.add_argument("--metric-csv", default=None, help="Optional comma-separated metric CSV files with method/model and AUC/R2/MAE/direction columns.")
+    method_cmp.add_argument("--out-dir", default="results/method_comparison")
+    method_cmp.set_defaults(func=run_method_comparison)
+    cards = sub.add_parser("ko-cards", help="Create one readable summary card per KO from delta_table.csv or predicted_ko_delta.csv.")
+    cards.add_argument("--delta-csv", required=True, help="delta_table.csv from evaluation or predicted_ko_delta.csv from apply-reference.")
+    cards.add_argument("--auc-csv", default=None, help="Optional auc_summary.csv.")
+    cards.add_argument("--confidence-csv", default=None, help="Optional transfer_confidence.csv.")
+    cards.add_argument("--max-features", type=int, default=8)
+    cards.add_argument("--out-dir", default="results/ko_summary_cards")
+    cards.set_defaults(func=run_ko_cards)
     multiome = sub.add_parser("assemble-multiome", help="Assemble RNA and ATAC matrices plus KO metadata into one benchmark-ready h5ad.")
     multiome.add_argument("--rna-input", required=True)
     multiome.add_argument("--rna-format", required=True, choices=["h5ad", "10x_mtx", "10x_h5"])

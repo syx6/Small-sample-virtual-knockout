@@ -218,6 +218,55 @@ python -m vkx.cli workflow-template \
 - `atac-peak`
 - `all`
 
+## 5.2 和现有方法比较
+
+新增 `method-comparison`，用于生成概念定位表和经验指标对比图：
+
+```bash
+python -m vkx.cli method-comparison \
+  --metric-csv results/our_metrics.csv,results/baseline_metrics.csv \
+  --out-dir results/method_comparison
+```
+
+固定输出：
+
+- `method_registry.csv`
+- `method_comparison_report.md`
+- `01_method_positioning.png`
+
+如果提供 metric CSV，还会输出：
+
+- `method_metric_comparison.csv`
+- `02_metric_comparison.png`
+
+这个命令的目的不是声称 VKX 全面超过所有模型，而是明确展示：VKX 在小样本、多模态、可解释、可报告边界方面的定位。
+
+## 5.3 KO summary card
+
+新增 `ko-cards`，用于把每个 KO 的结果转成一张更适合用户阅读的卡片：
+
+```bash
+python -m vkx.cli ko-cards \
+  --delta-csv results/software_interface_demo/delta_table.csv \
+  --auc-csv results/software_interface_demo/auc_summary.csv \
+  --out-dir results/ko_summary_cards
+```
+
+对 prediction-only reference application，也可以使用：
+
+```bash
+python -m vkx.cli ko-cards \
+  --delta-csv results/reference_apply/predicted_ko_delta.csv \
+  --confidence-csv results/reference_apply/transfer_confidence.csv \
+  --out-dir results/reference_apply/ko_cards
+```
+
+输出：
+
+- `ko_summary_cards_index.csv`
+- `ko_summary_cards_report.md`
+- `ko_card_<KO>.png`
+
 ## 6. ATAC raw peak count 与 peak annotation
 
 新增 `extra-feature-selection=atac_peak`。
