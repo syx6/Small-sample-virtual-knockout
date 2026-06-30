@@ -104,8 +104,23 @@ python -m vkx.cli apply-reference \
 
 - `uncertainty_intervals.csv`
 - `07_uncertainty_intervals.png`
+- `uncertainty_virtual_cells.csv`
+- `08_uncertainty_virtual_cell_pca.png`
+- `generator_report.md`
 
-说明：CLI 也预留了 `vae`、`flow`、`diffusion` 入口，但当前它们仍被限制在 hard residual anchor 框架内。后续真正接入轻量 neural generator 时，仍会保持“baseline 定方向，generator 只学方向附近不确定性”的原则。
+说明：`vae`、`flow`、`diffusion` 入口现在会生成 hard-constrained uncertainty cells。当前实现会优先检查是否有神经网络后端；如果没有可用后端，会自动回退到 empirical residual bank。无论哪种方式，KO 平均方向都由 residual/PLS 或 interaction residual 固定，generator 只负责生成方向附近的不确定性细胞云。
+
+控制采样数量：
+
+```bash
+python -m vkx.cli apply-reference \
+  --reference-model results/reference_model.pkl \
+  --state-csv path/to/ordinary_10x_state_scores.csv \
+  --target-kos STAT1+JAK2 \
+  --uncertainty-method diffusion \
+  --uncertainty-samples-per-ko 300 \
+  --out-dir results/reference_apply
+```
 
 ## 4. RNA + ADT + ATAC 输入方式
 
@@ -183,6 +198,24 @@ python -m vkx.cli benchmark-registry \
 - `prediction_only_or_incomplete`
 
 只有 labelled benchmark 才能报告真实准确率、AUC、R2 和 MAE；`trimodal_prediction_only` 只能看预测状态变化、prior coverage、transfer confidence 和 uncertainty band。
+
+## 5.1 一键 workflow 模板
+
+如果不确定应该跑哪条命令，可以先生成 workflow 模板：
+
+```bash
+python -m vkx.cli workflow-template \
+  --mode all \
+  --out-dir results/workflow_template
+```
+
+支持模式：
+
+- `labelled-benchmark`
+- `reference`
+- `prediction-only`
+- `atac-peak`
+- `all`
 
 ## 6. ATAC raw peak count 与 peak annotation
 
@@ -285,4 +318,4 @@ python -m vkx.cli run \
 - 真正公开 RNA+ADT+ATAC 且带 perturbation 标签的数据集仍未确认；找到后再升级为 full trimodal labelled benchmark。
 - motif-to-peak annotation 和 peak-gene linkage 已经可以通过 `--extra-feature-metadata-csv` 输入并写入 feature metadata；下一步是开发自动生成 annotation 表的辅助脚本。
 - 已新增 `make-gene-tss`、`standardize-peak-scores`、`annotate-peaks` 和一键式 `build-peak-annotation`，可以从 GTF、motif hits、marker peaks 自动生成基础 peak annotation 表与 QC 图；下一步可以继续接 Ensembl/GENCODE 自动下载和更具体的 motif scanner 输出格式转换。
-- VAE / flow matching / diffusion 入口已保留，但当前仍采用 hard residual uncertainty band；真正 neural generator 需要在有更多同类型 perturbation 数据后再训练。
+- VAE / flow matching / diffusion 入口现在会生成 hard-constrained uncertainty virtual cells；没有可用神经网络后端时会自动回退到 empirical residual bank，并在 `generator_report.md` 中说明。

@@ -14,6 +14,7 @@ from .peak_annotation import annotate_peaks, build_peak_annotation_pipeline, mak
 from .preprocess import csv_matrix_to_state_table, h5ad_to_state_scores, h5ad_to_state_table, parse_extra_obsm_specs
 from .reference import apply_reference_model, inspect_reference_model, train_reference_model
 from .visualization import make_all_plots
+from .workflow import write_workflow_template
 
 
 def parse_features(value: str | None) -> list[str] | None:
@@ -108,6 +109,12 @@ def run_benchmark_registry(args: argparse.Namespace) -> None:
     print(f"  registry: {args.out_dir}\\public_benchmark_registry.csv")
     print(f"  report: {args.out_dir}\\public_benchmark_registry_report.md")
     print(table[["dataset", "status", "recommended_use"]].to_string(index=False))
+
+
+def run_workflow_template(args: argparse.Namespace) -> None:
+    path = write_workflow_template(args.mode, args.out_dir)
+    print("Saved workflow template:")
+    print(f"  template: {path}")
 
 
 def run_assemble_multiome(args: argparse.Namespace) -> None:
@@ -323,6 +330,7 @@ def run_apply_reference(args: argparse.Namespace) -> None:
         batch_col=args.batch_col,
         uncertainty_method=args.uncertainty_method,
         uncertainty_scale=args.uncertainty_scale,
+        uncertainty_samples_per_ko=args.uncertainty_samples_per_ko,
         extra_feature_metadata_csv=args.extra_feature_metadata_csv,
     )
     print("Applied reference virtual KO model:")
@@ -411,6 +419,10 @@ def build_parser() -> argparse.ArgumentParser:
     registry = sub.add_parser("benchmark-registry", help="Write the public multimodal perturbation benchmark registry and interpretation boundaries.")
     registry.add_argument("--out-dir", default="results/public_benchmark_registry")
     registry.set_defaults(func=run_benchmark_registry)
+    workflow = sub.add_parser("workflow-template", help="Write a copy-paste workflow template for common labelled, reference, prediction-only, and ATAC peak use cases.")
+    workflow.add_argument("--mode", choices=["all", "labelled-benchmark", "reference", "prediction-only", "atac-peak"], default="all")
+    workflow.add_argument("--out-dir", default="results/workflow_template")
+    workflow.set_defaults(func=run_workflow_template)
     multiome = sub.add_parser("assemble-multiome", help="Assemble RNA and ATAC matrices plus KO metadata into one benchmark-ready h5ad.")
     multiome.add_argument("--rna-input", required=True)
     multiome.add_argument("--rna-format", required=True, choices=["h5ad", "10x_mtx", "10x_h5"])
@@ -545,6 +557,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply_ref.add_argument("--extra-feature-metadata-csv", default=None, help="Optional feature annotation CSV for extra obsm features; defaults to the path stored in the reference model when available.")
     apply_ref.add_argument("--uncertainty-method", choices=["none", "hard-residual", "vae", "flow", "diffusion"], default="none", help="Optional hard-constrained uncertainty band. VAE/flow/diffusion currently share the same hard residual anchor unless a custom generator is plugged in.")
     apply_ref.add_argument("--uncertainty-scale", type=float, default=0.25, help="Width multiplier for the hard-constrained residual uncertainty band.")
+    apply_ref.add_argument("--uncertainty-samples-per-ko", type=int, default=250, help="Number of hard-constrained uncertainty virtual cells to sample per requested KO. Use 0 for interval-only output.")
     apply_ref.add_argument("--seed", type=int, default=7)
     apply_ref.set_defaults(func=run_apply_reference)
     inspect_ref = sub.add_parser("inspect-reference", help="Inspect a saved reference KO model before applying it.")

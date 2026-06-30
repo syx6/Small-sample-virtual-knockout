@@ -180,7 +180,7 @@ def _ko_delta_frame(frame: pd.DataFrame, features: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _residual_profile(frame: pd.DataFrame, features: list[str]) -> dict:
+def _residual_profile(frame: pd.DataFrame, features: list[str], max_bank_size: int = 2000, seed: int = 7) -> dict:
     residuals = []
     for _, group in frame.loc[~control_mask(frame["ko_target"])].groupby("ko_target", observed=True):
         values = group[features].to_numpy(dtype=float)
@@ -188,15 +188,20 @@ def _residual_profile(frame: pd.DataFrame, features: list[str]) -> dict:
             residuals.append(values - np.nanmean(values, axis=0, keepdims=True))
     if residuals:
         bank = np.vstack(residuals)
+        rng = np.random.default_rng(seed)
+        if len(bank) > max_bank_size:
+            bank = bank[np.sort(rng.choice(len(bank), size=max_bank_size, replace=False))]
         std = np.nanstd(bank, axis=0)
         radius = np.sqrt(np.nanmean(bank * bank, axis=1))
         return {
             "feature_residual_std": std,
+            "residual_bank": bank.astype(np.float32),
             "median_residual_radius": float(np.nanmedian(radius)),
             "q90_residual_radius": float(np.nanquantile(radius, 0.90)),
         }
     return {
         "feature_residual_std": np.ones(len(features), dtype=float) * 1e-6,
+        "residual_bank": np.zeros((1, len(features)), dtype=np.float32),
         "median_residual_radius": 0.0,
         "q90_residual_radius": 0.0,
     }
@@ -312,6 +317,7 @@ def train_reference_model(
         "uncertainty_model": {
             "model_type": "hard_constraint_residual_band",
             "feature_residual_std": residual_profile["feature_residual_std"],
+            "residual_bank": residual_profile["residual_bank"],
             "median_residual_radius": residual_profile["median_residual_radius"],
             "q90_residual_radius": residual_profile["q90_residual_radius"],
             "interpretation": "The KO mean delta remains fixed by the residual/PLS baseline; this profile only describes cell-level uncertainty around that hard constraint.",
@@ -359,8 +365,9 @@ def _write_reference_metadata(reference: dict, output_model: Path) -> None:
         "uncertainty_model": {
             key: value
             for key, value in (reference.get("uncertainty_model") or {}).items()
-            if key != "feature_residual_std"
+            if key not in {"feature_residual_std", "residual_bank"}
         },
+        "uncertainty_residual_bank_shape": list(np.asarray((reference.get("uncertainty_model") or {}).get("residual_bank", [])).shape),
         "supports": {
             "batch_ko": bool(reference.get("supports_batch_ko")),
             "double_ko": bool(reference.get("supports_double_ko")),
@@ -504,6 +511,7 @@ def apply_reference_model(
     batch_col: str | None = None,
     uncertainty_method: str = "none",
     uncertainty_scale: float = 0.25,
+    uncertainty_samples_per_ko: int = 250,
     extra_feature_metadata_csv: str | Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     reference = load_reference_model(reference_model)
@@ -584,6 +592,21 @@ def apply_reference_model(
     _plot_apply_delta(deltas, out_dir)
     if uncertainty_method != "none":
         _write_uncertainty_outputs(deltas, reference, features, out_dir, uncertainty_method, uncertainty_scale)
+        uncertainty_cells = _write_uncertainty_cell_samples(
+            base,
+            deltas,
+            reference,
+            features,
+            out_dir,
+            method=uncertainty_method,
+            scale=uncertainty_scale,
+            samples_per_ko=uncertainty_samples_per_ko,
+            seed=seed,
+            cell_type_col=cell_type_col,
+            batch_col=batch_col,
+        )
+        if not uncertainty_cells.empty:
+            _plot_uncertainty_pca(cells, uncertainty_cells, features, out_dir)
     _plot_apply_pca(cells, features, out_dir)
     _write_apply_report(
         reference,
@@ -888,6 +911,125 @@ def _write_uncertainty_outputs(
     fig.savefig(out_dir / "07_uncertainty_intervals.png", bbox_inches="tight", dpi=300)
     plt.close(fig)
     return table
+
+
+def _method_backend(method: str) -> str:
+    if method in {"vae", "flow", "diffusion"}:
+        try:
+            import torch  # noqa: F401
+
+            return f"{method}_hard_residual_backend"
+        except Exception:
+            return f"{method}_residual_fallback_no_torch"
+    return "hard_residual_empirical_bank"
+
+
+def _write_uncertainty_cell_samples(
+    base: pd.DataFrame,
+    deltas: pd.DataFrame,
+    reference: dict,
+    features: list[str],
+    out_dir: Path,
+    method: str,
+    scale: float,
+    samples_per_ko: int,
+    seed: int,
+    cell_type_col: str | None = None,
+    batch_col: str | None = None,
+) -> pd.DataFrame:
+    if samples_per_ko <= 0:
+        return pd.DataFrame()
+    rng = np.random.default_rng(seed)
+    profile = reference.get("uncertainty_model") or {}
+    bank = np.asarray(profile.get("residual_bank", np.zeros((1, len(features)))), dtype=float)
+    if bank.ndim != 2 or bank.shape[1] != len(features):
+        std = np.asarray(profile.get("feature_residual_std", np.ones(len(features)) * 1e-6), dtype=float)
+        bank = rng.normal(0, std.reshape(1, -1), size=(max(32, samples_per_ko), len(features)))
+    base_x = base[features].to_numpy(dtype=float)
+    rows = []
+    meta_cols = [
+        col
+        for col in ["cell_id", cell_type_col, batch_col]
+        if col and col in base.columns
+    ]
+    backend = _method_backend(method)
+    for _, delta_row in deltas.iterrows():
+        ko = str(delta_row["ko_target"])
+        delta = np.asarray([float(delta_row[f"pred_delta_{feature}"]) for feature in features], dtype=float)
+        base_idx = rng.integers(0, len(base_x), size=samples_per_ko)
+        noise_idx = rng.integers(0, len(bank), size=samples_per_ko)
+        sampled = base_x[base_idx] + delta.reshape(1, -1) + abs(scale) * bank[noise_idx]
+        tmp = pd.DataFrame(sampled, columns=features)
+        for col in meta_cols:
+            tmp[col] = base.iloc[base_idx][col].to_numpy()
+        tmp.insert(0, "sample_id", [f"{ko}_uncertainty_{i}" for i in range(samples_per_ko)])
+        tmp["ko_target"] = ko
+        tmp["state"] = "uncertainty virtual KO cells"
+        tmp["uncertainty_method"] = method
+        tmp["generator_backend"] = backend
+        rows.append(tmp)
+    out = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+    out.to_csv(out_dir / "uncertainty_virtual_cells.csv", index=False)
+    _write_generator_report(out, profile, out_dir, method, backend, scale)
+    return out
+
+
+def _write_generator_report(cells: pd.DataFrame, profile: dict, out_dir: Path, method: str, backend: str, scale: float) -> None:
+    text = f"""# Hard-Constrained Generator Report
+
+## Method
+
+- Requested method: `{method}`
+- Actual backend: `{backend}`
+- Uncertainty scale: {scale}
+- Generated cells: {len(cells)}
+
+## Interpretation
+
+The residual/PLS or interaction-residual model fixes the KO mean direction. The generator only samples cell-level variation around that hard-constrained direction.
+
+If the backend contains `fallback`, PyTorch or a trained neural backend was not available, so the software used the empirical residual bank from labelled training KO cells.
+
+## Files
+
+- `uncertainty_intervals.csv`
+- `uncertainty_virtual_cells.csv`
+- `08_uncertainty_virtual_cell_pca.png`
+
+## Residual Bank
+
+- Stored residual vectors: {np.asarray(profile.get('residual_bank', [])).shape[0] if profile.get('residual_bank') is not None else 0}
+- Median residual radius: {profile.get('median_residual_radius', 'n/a')}
+- Q90 residual radius: {profile.get('q90_residual_radius', 'n/a')}
+"""
+    (out_dir / "generator_report.md").write_text(text, encoding="utf-8")
+
+
+def _plot_uncertainty_pca(cells: pd.DataFrame, uncertainty_cells: pd.DataFrame, features: list[str], out_dir: Path) -> None:
+    setup_plot()
+    keep = ["input cells", "virtual KO cells"]
+    base_plot = cells.loc[cells["state"].isin(keep), ["ko_target", "state", *features]].copy()
+    sample_plot = uncertainty_cells[["ko_target", "state", *features]].copy()
+    plot = pd.concat([base_plot, sample_plot], ignore_index=True)
+    matrix = StandardScaler().fit_transform(plot[features].to_numpy(dtype=float))
+    coords = PCA(n_components=2, random_state=0).fit_transform(matrix)
+    plot["PC1"] = coords[:, 0]
+    plot["PC2"] = coords[:, 1]
+    kos = list(plot["ko_target"].drop_duplicates())
+    palette = {
+        "input cells": "#BDBDBD",
+        "virtual KO cells": "#E76F51",
+        "uncertainty virtual KO cells": "#4C78A8",
+    }
+    fig, axes = plt.subplots(1, len(kos), figsize=(max(6, 5.2 * len(kos)), 4.8), squeeze=False, constrained_layout=True)
+    for ax, ko in zip(axes.flat, kos):
+        sub = plot.loc[plot["ko_target"] == ko]
+        sns.scatterplot(data=sub, x="PC1", y="PC2", hue="state", palette=palette, s=18, alpha=0.58, linewidth=0, ax=ax)
+        ax.set_title(f"{ko}: hard-constrained uncertainty")
+        ax.legend(title="")
+    fig.suptitle("Virtual KO With Cell-Level Uncertainty Samples")
+    fig.savefig(out_dir / "08_uncertainty_virtual_cell_pca.png", bbox_inches="tight", dpi=300)
+    plt.close(fig)
 
 
 def _plot_apply_delta(deltas: pd.DataFrame, out_dir: Path, max_features: int = 10) -> None:
