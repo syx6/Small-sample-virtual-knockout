@@ -244,6 +244,31 @@ def run_paper_benchmark(args: argparse.Namespace) -> None:
     print(f"           {args.out_dir}\\06_benchmark_completeness.png")
 
 
+def run_benchmark_suite_command(args: argparse.Namespace) -> None:
+    from .benchmark_suite import run_benchmark_suite
+
+    methods = [part.strip() for part in (args.methods or "").split(",") if part.strip()] or None
+    result = run_benchmark_suite(
+        out_dir=args.out_dir,
+        suite_csv=args.suite_csv,
+        prior_dir=args.prior_dir,
+        external_predictions_csv=args.external_predictions_csv,
+        include_default_examples=not args.skip_default_examples,
+        include_long_examples=args.include_long_examples,
+        methods=methods,
+        seed=args.seed,
+    )
+    print("Saved full benchmark suite:")
+    print(f"  report: {args.out_dir}\\benchmark_suite_report_zh.md")
+    print(f"  jobs: {args.out_dir}\\benchmark_suite_jobs.csv")
+    print(f"  aggregate: {args.out_dir}\\aggregate\\aggregate_benchmark_report.md")
+    print(f"  paper figures: {args.out_dir}\\paper_figures")
+    print(f"  top figures: {args.out_dir}\\top_figures")
+    print(f"  external template: {args.out_dir}\\formal_*\\external_prediction_template.csv")
+    print(f"  benchmark jobs: {len(result['jobs'])}")
+    print(f"  scored formal rows: {len(result['formal'])}")
+
+
 def run_diagnose_results(args: argparse.Namespace) -> None:
     from .diagnostics import diagnose_virtual_ko_results
 
@@ -692,6 +717,16 @@ def build_parser() -> argparse.ArgumentParser:
     paper.add_argument("--result-dirs", required=True, help="Comma-separated VKX result directories with summary.csv, heatmap, UMAP and AUC outputs.")
     paper.add_argument("--out-dir", default="results/paper_benchmark_package")
     paper.set_defaults(func=run_paper_benchmark)
+    suite = sub.add_parser("benchmark-suite", help="Run the full strengthened benchmark workflow and produce the paper-style 7-figure package.")
+    suite.add_argument("--suite-csv", default=None, help="Optional CSV with dataset_id,state_csv,ko_col,target_kos,features,prior_dir columns.")
+    suite.add_argument("--prior-dir", default="data/priors")
+    suite.add_argument("--methods", default="adaptive,boosted,ensemble,calibrated,vkx,pls,ridge,additive,scgen,cpa,gears,cellot")
+    suite.add_argument("--external-predictions-csv", default=None, help="Optional scGen/CPA/GEARS/CellOT predictions with method, ko_target, and pred_delta_* columns.")
+    suite.add_argument("--skip-default-examples", action="store_true", help="Only run jobs provided in --suite-csv.")
+    suite.add_argument("--include-long-examples", action="store_true", help="Also run slower bundled examples such as the Norman double-KO formal benchmark.")
+    suite.add_argument("--seed", type=int, default=7)
+    suite.add_argument("--out-dir", default="results/full_benchmark_suite")
+    suite.set_defaults(func=run_benchmark_suite_command)
     diagnose = sub.add_parser("diagnose-results", help="Explain which virtual KO results are reliable or risky and why.")
     diagnose.add_argument("--delta-csv", required=True, help="delta_table.csv from evaluation or predicted_ko_delta.csv from apply-reference.")
     diagnose.add_argument("--manifest-csv", default=None, help="Optional derived_state_manifest.csv for modality-aware explanations.")
