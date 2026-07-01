@@ -31,6 +31,7 @@ def make_paper_benchmark_package(
     availability.to_csv(out / "paper_method_availability.csv", index=False)
     result_summary.to_csv(out / "paper_result_summary.csv", index=False)
 
+    _plot_publication_main_figure(metrics, availability, roc_points, predictions, truth, result_summary, out)
     _plot_method_leaderboard(metrics, availability, out)
     _plot_roc_curves(roc_points, metrics, out)
     _plot_delta_heatmap(predictions, truth, out)
@@ -298,6 +299,8 @@ def _write_report(
         "",
         "## Main figures",
         "",
+        "![Publication main figure](00_publication_main_figure.png)",
+        "",
         "![Method leaderboard](01_method_leaderboard.png)",
         "",
         "![AUC ROC curves](02_auc_roc_curves.png)",
@@ -351,6 +354,200 @@ def _write_report(
     (out / "paper_benchmark_report_zh.md").write_text("\n".join(text), encoding="utf-8")
 
 
+def _plot_publication_main_figure(
+    metrics: pd.DataFrame,
+    availability: pd.DataFrame,
+    roc_points: pd.DataFrame,
+    predictions: pd.DataFrame,
+    truth: pd.DataFrame,
+    result_summary: pd.DataFrame,
+    out: Path,
+) -> None:
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        return
+    width, height = 2400, 1700
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    title_font = _pil_font(34)
+    panel_font = _pil_font(28)
+    font = _pil_font(20)
+    small = _pil_font(16)
+    tiny = _pil_font(13)
+    draw.text((50, 28), "Formal benchmark of VKX virtual knockout", fill=(15, 15, 15), font=title_font)
+    draw.text((50, 76), "Same-dataset scoring is separated from external deep-method slots to avoid over-claiming.", fill=(75, 75, 75), font=font)
+
+    panel_a = (50, 135, 1160, 690)
+    panel_b = (1240, 135, 2350, 690)
+    panel_c = (50, 770, 1530, 1600)
+    panel_d = (1610, 770, 2350, 1600)
+    _draw_panel_box(draw, panel_a, "A", "Method-level benchmark", panel_font)
+    _draw_panel_box(draw, panel_b, "B", "AUC as ROC curve", panel_font)
+    _draw_panel_box(draw, panel_c, "C", "Real vs virtual KO response", panel_font)
+    _draw_panel_box(draw, panel_d, "D", "Single/double/multimodal coverage", panel_font)
+
+    _draw_main_method_panel(draw, metrics, availability, panel_a, font, small, tiny)
+    _draw_main_roc_panel(draw, roc_points, metrics, panel_b, font, small, tiny)
+    _draw_main_heatmap_panel(draw, predictions, truth, panel_c, font, small, tiny)
+    _draw_main_gallery_panel(draw, result_summary, panel_d, font, small, tiny)
+    img.save(out / "00_publication_main_figure.png")
+
+
+def _draw_panel_box(draw, box: tuple[int, int, int, int], letter: str, title: str, panel_font) -> None:
+    x0, y0, x1, y1 = box
+    draw.rounded_rectangle((x0, y0, x1, y1), radius=14, outline=(225, 225, 225), width=2, fill=(253, 253, 253))
+    draw.text((x0 + 22, y0 + 16), letter, fill=(15, 15, 15), font=panel_font)
+    draw.text((x0 + 62, y0 + 18), title, fill=(30, 30, 30), font=panel_font)
+
+
+def _draw_main_method_panel(draw, metrics: pd.DataFrame, availability: pd.DataFrame, box: tuple[int, int, int, int], font, small, tiny) -> None:
+    x0, y0, x1, _ = box
+    if metrics.empty:
+        draw.text((x0 + 28, y0 + 76), "No benchmark metrics found.", fill=(80, 80, 80), font=font)
+        return
+    rows = metrics.copy()
+    for col in ["roc_auc", "r2", "mae", "direction_cosine"]:
+        rows[col] = pd.to_numeric(rows[col], errors="coerce")
+    rows["_rank"] = rows["roc_auc"].fillna(-1) + 0.2 * rows["r2"].fillna(-1) - 0.2 * rows["mae"].fillna(1)
+    rows = rows.sort_values("_rank", ascending=False).head(5)
+    draw.text((x0 + 32, y0 + 70), "Scored methods", fill=(80, 80, 80), font=small)
+    metric_x = [x0 + 360, x0 + 560, x0 + 760]
+    for x, label in zip(metric_x, ["AUC", "R2", "MAE"]):
+        draw.text((x, y0 + 105), label, fill=(45, 45, 45), font=tiny)
+    colors = _method_colors()
+    max_mae = max(float(rows["mae"].max(skipna=True)), 0.01)
+    for i, (_, row) in enumerate(rows.iterrows()):
+        y = y0 + 138 + i * 66
+        method = str(row["method"])
+        draw.rectangle((x0 + 32, y + 7, x0 + 46, y + 38), fill=colors.get(method, (80, 80, 80)))
+        draw.text((x0 + 58, y + 8), _method_short(method), fill=(25, 25, 25), font=font)
+        specs = [("roc_auc", 0, 1, False), ("r2", -0.5, 1, False), ("mae", 0, max_mae, True)]
+        for x, (col, vmin, vmax, lower_better) in zip(metric_x, specs):
+            val = float(row[col]) if pd.notna(row[col]) else np.nan
+            frac = 0 if not np.isfinite(val) else min(max((val - vmin) / (vmax - vmin + 1e-9), 0), 1)
+            frac = 1 - frac if lower_better else frac
+            bar_color = (76, 120, 168) if lower_better else (42, 157, 143)
+            draw.rectangle((x, y + 8, x + 118, y + 32), fill=(242, 242, 242), outline=(220, 220, 220))
+            draw.rectangle((x, y + 8, x + int(118 * frac), y + 32), fill=bar_color)
+            draw.text((x + 128, y + 10), f"{val:.2f}" if col != "mae" else f"{val:.3f}", fill=(30, 30, 30), font=tiny)
+    external = []
+    if not availability.empty and "method" in availability.columns:
+        for method in EXTERNAL_METHOD_ORDER:
+            sub = availability.loc[availability["method"].astype(str).str.lower() == method.lower()]
+            if not sub.empty:
+                external.append(f"{method}: {sub['status'].iloc[0]}")
+    text = "External slots: " + "; ".join(external) if external else "External slots: not provided"
+    draw.text((x0 + 32, y0 + 500), text, fill=(105, 65, 65), font=small)
+
+
+def _draw_main_roc_panel(draw, roc_points: pd.DataFrame, metrics: pd.DataFrame, box: tuple[int, int, int, int], font, small, tiny) -> None:
+    x0, y0, x1, _ = box
+    if roc_points.empty:
+        draw.text((x0 + 28, y0 + 76), "No ROC points found.", fill=(80, 80, 80), font=font)
+        return
+    auc_map = dict(zip(metrics["method"].astype(str), pd.to_numeric(metrics["roc_auc"], errors="coerce"))) if not metrics.empty else {}
+    left, top, size = x0 + 70, y0 + 105, 420
+    draw.rectangle((left, top, left + size, top + size), outline=(180, 180, 180))
+    for tick in [0, 0.5, 1.0]:
+        tx = left + int(tick * size)
+        ty = top + size - int(tick * size)
+        draw.line((tx, top, tx, top + size), fill=(235, 235, 235))
+        draw.line((left, ty, left + size, ty), fill=(235, 235, 235))
+        draw.text((tx - 10, top + size + 12), f"{tick:g}", fill=(60, 60, 60), font=tiny)
+        draw.text((left - 28, ty - 8), f"{tick:g}", fill=(60, 60, 60), font=tiny)
+    draw.line((left, top + size, left + size, top), fill=(165, 165, 165))
+    colors = _method_colors()
+    order = ["ResponseBoosted", "ConstrainedEnsemble", "Ridge", "PLS", "VKX"]
+    legend_y = top + 15
+    for method in order:
+        group = roc_points.loc[roc_points["method"].astype(str) == method]
+        if group.empty:
+            continue
+        curve = group.groupby("fpr", as_index=False)["tpr"].mean().sort_values("fpr")
+        points = [(left + int(float(r.fpr) * size), top + size - int(float(r.tpr) * size)) for r in curve.itertuples()]
+        color = colors.get(method, (70, 70, 70))
+        if len(points) > 1:
+            draw.line(points, fill=color, width=4)
+        draw.rectangle((x0 + 560, legend_y + 4, x0 + 582, legend_y + 22), fill=color)
+        auc = auc_map.get(method, np.nan)
+        label = f"{_method_short(method)} AUC {auc:.3f}" if np.isfinite(auc) else _method_short(method)
+        draw.text((x0 + 596, legend_y), label, fill=(25, 25, 25), font=small)
+        legend_y += 38
+    draw.text((left + 160, top + size + 48), "False positive rate", fill=(40, 40, 40), font=small)
+    draw.text((left - 8, top - 30), "TPR", fill=(40, 40, 40), font=small)
+
+
+def _draw_main_heatmap_panel(draw, predictions: pd.DataFrame, truth: pd.DataFrame, box: tuple[int, int, int, int], font, small, tiny) -> None:
+    if predictions.empty or truth.empty:
+        draw.text((box[0] + 28, box[1] + 76), "No prediction/truth table found.", fill=(80, 80, 80), font=font)
+        return
+    merged = predictions.merge(truth, on="ko_target", how="inner")
+    if merged.empty:
+        return
+    features = [col.removeprefix("true_delta_") for col in truth.columns if col.startswith("true_delta_")]
+    scored = []
+    for feature in features:
+        scored.append((feature, float(np.nanmean(np.abs(pd.to_numeric(truth[f"true_delta_{feature}"], errors="coerce"))))))
+    chosen = [feature for feature, _ in sorted(scored, key=lambda x: x[1], reverse=True)[:7]]
+    rows = []
+    for _, row in truth.iterrows():
+        rows.append((f"TRUE {row['ko_target']}", [float(row.get(f"true_delta_{f}", np.nan)) for f in chosen]))
+    boosted = merged.loc[merged["method"].astype(str) == "ResponseBoosted"]
+    for _, row in boosted.iterrows():
+        rows.append((f"VKX-B {row['ko_target']}", [float(row.get(f"pred_delta_{f}", np.nan)) for f in chosen]))
+    x0, y0, _, _ = box
+    left = x0 + 255
+    top = y0 + 105
+    cell_w = 130
+    cell_h = 48
+    matrix = np.asarray([vals for _, vals in rows], dtype=float)
+    vmax = max(float(np.nanmax(np.abs(matrix))), 1e-9)
+    for j, feature in enumerate(chosen):
+        label = _feature_label(feature)
+        for k, part in enumerate(label.split("\n")[:2]):
+            draw.text((left + j * cell_w, y0 + 68 + 17 * k), _short(part, 16), fill=(35, 35, 35), font=tiny)
+    for i, (label, values) in enumerate(rows):
+        y = top + i * cell_h
+        draw.text((x0 + 32, y + 10), _short(label, 21), fill=(25, 25, 25), font=small)
+        for j, value in enumerate(values):
+            x = left + j * cell_w
+            draw.rectangle((x, y, x + cell_w - 5, y + cell_h - 5), fill=_delta_color(value, vmax), outline=(255, 255, 255))
+            text_color = (255, 255, 255) if np.isfinite(value) and abs(value) / vmax > 0.45 else (35, 35, 35)
+            draw.text((x + 28, y + 11), f"{value:.2f}", fill=text_color, font=tiny)
+    draw.text((x0 + 32, y0 + 690), "Rows compare true KO deltas with VKX-Boosted predictions on the strongest response features.", fill=(80, 80, 80), font=small)
+
+
+def _draw_main_gallery_panel(draw, result_summary: pd.DataFrame, box: tuple[int, int, int, int], font, small, tiny) -> None:
+    x0, y0, _, _ = box
+    if result_summary.empty:
+        draw.text((x0 + 28, y0 + 76), "No result summaries found.", fill=(80, 80, 80), font=font)
+        return
+    rows = result_summary.copy()
+    rows["display_label"] = rows.apply(_display_result_label, axis=1)
+    for col in ["roc_auc", "mean_direction_cosine", "mean_abs_delta_error"]:
+        rows[col] = pd.to_numeric(rows[col], errors="coerce")
+    draw.text((x0 + 32, y0 + 72), "Dataset / task", fill=(70, 70, 70), font=small)
+    draw.text((x0 + 355, y0 + 72), "AUC", fill=(70, 70, 70), font=small)
+    draw.text((x0 + 520, y0 + 72), "Direction", fill=(70, 70, 70), font=small)
+    max_mae = max(float(rows["mean_abs_delta_error"].max(skipna=True)), 0.01)
+    for i, (_, row) in enumerate(rows.head(6).iterrows()):
+        y = y0 + 112 + i * 92
+        draw.text((x0 + 32, y), str(row["display_label"]), fill=(25, 25, 25), font=small)
+        for x, col, vmin, vmax, lower in [
+            (x0 + 355, "roc_auc", 0, 1, False),
+            (x0 + 520, "mean_direction_cosine", 0, 1, False),
+            (x0 + 355, "mean_abs_delta_error", 0, max_mae, True),
+        ]:
+            yy = y + (36 if col == "mean_abs_delta_error" else 0)
+            value = float(row[col]) if pd.notna(row[col]) else np.nan
+            frac = 0 if not np.isfinite(value) else min(max((value - vmin) / (vmax - vmin + 1e-9), 0), 1)
+            frac = 1 - frac if lower else frac
+            color = (76, 120, 168) if lower else (42, 157, 143)
+            draw.rectangle((x, yy, x + 108, yy + 22), fill=(244, 244, 244), outline=(220, 220, 220))
+            draw.rectangle((x, yy, x + int(108 * frac), yy + 22), fill=color)
+            label = "MAE" if col == "mean_abs_delta_error" else ""
+            draw.text((x + 116, yy + 2), f"{label} {value:.2f}".strip(), fill=(35, 35, 35), font=tiny)
 def _draw_method_leaderboard(
     rows: pd.DataFrame,
     missing: pd.DataFrame,

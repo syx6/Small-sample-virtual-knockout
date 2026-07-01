@@ -18,9 +18,18 @@ python -m vkx.cli paper-benchmark \
 - 单敲、双敲、多模态、ATAC peak 是否都有结果；
 - 哪些结论可靠，哪些还不能宣传。
 
-`paper-benchmark` 的目的就是把这些问题收束成四张主图和一份报告。
+`paper-benchmark` 的目的就是把这些问题收束成一张论文级主图、四张可单独查看的分图和一份报告。
 
 ## 输出图
+
+0. `00_publication_main_figure.png`
+
+   推荐作为论文主图的 A-D 多面板 figure：
+
+   - A：正式方法横向 benchmark；
+   - B：AUC 的 ROC 曲线形式；
+   - C：真实 KO 与 VKX-Boosted 虚拟 KO 的 heatmap；
+   - D：单敲、双敲、多模态和 ATAC peak 覆盖情况。
 
 1. `01_method_leaderboard.png`
 
@@ -42,13 +51,13 @@ python -m vkx.cli paper-benchmark \
 
 ## 当前结论
 
-当前正式 benchmark 中，`ResponseBoosted` 是表现最好的 VKX 变体：
+当前标准 Papalexi 小型 state-score benchmark 中，`PLS` 的 AUC 最高，而 `ResponseBoosted` 是表现最好的 VKX 变体之一：
 
-- AUC 约 0.840；
-- R2 约 0.286；
-- MAE 约 0.283。
+- PLS AUC 约 0.736；
+- VKX-Boosted AUC 约 0.625；
+- VKX-Boosted MAE 约 0.139，是当前 scored methods 中较低的误差。
 
-这说明加入 response-strength prior 后，VKX 相比原始 VKX 和早期 constrained ensemble 有进步。
+这说明加入 response-strength prior 后，VKX 相比原始 VKX 有进步，但也说明传统 PLS baseline 在这个小型数据上仍然很强，不能回避。
 
 但是，这个结果仍然不能说明 VKX 已经强过 scGen、CPA、GEARS、CellOT。原因是这些外部深度方法还没有在同一数据、同一 holdout KO、同一指标下提供预测文件。
 
@@ -58,7 +67,7 @@ python -m vkx.cli paper-benchmark \
 
 已完成统一接口和图包：
 
-- 内部方法：VKX、ResponseBoosted、PLS、Ridge、ConstrainedEnsemble、Additive；
+- 内部方法：VKX、ResponseBoosted、CalibratedEnsemble、ConstrainedEnsemble、PLS、Ridge、Additive；
 - 外部方法槽位：scGen、CPA、GEARS、CellOT；
 - 指标：AUC、R2、MAE、direction cosine、feature hit-rate；
 - 图：leaderboard、ROC curve、真实 vs 虚拟 heatmap。
