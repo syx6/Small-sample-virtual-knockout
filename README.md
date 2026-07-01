@@ -162,11 +162,70 @@ python -m vkx.cli method-comparison \
 
 VKX 的定位是小样本、多模态、先验约束、可解释 baseline。它应该和 ridge/PLS、scGen、CPA、GEARS、CellOT、diffusion/flow 类方法比较，但结论需要限定在具体 benchmark 和数据规模内。
 
+更正式的同数据 benchmark 可以使用：
+
+```bash
+python -m vkx.cli formal-benchmark \
+  --state-csv results/labelled_virtual_ko/derived_state_scores.csv \
+  --ko-col ko_target \
+  --target-kos STAT1,JAK2,STAT1+JAK2 \
+  --prior-dir data/priors \
+  --methods vkx,pls,ridge,additive,scgen,cpa,gears,cellot \
+  --out-dir results/formal_method_benchmark
+```
+
+固定输出：
+
+- `formal_benchmark_metrics.csv`
+- `method_metric_comparison.csv`
+- `method_availability.csv`
+- `01_formal_benchmark_metric_panel.png`
+- `02_formal_benchmark_delta_heatmap.png`
+- `03_method_availability.png`
+- `figure_package/figure_package_report.md`
+
+其中 scGen、CPA、GEARS 和 CellOT 默认是外部方法槽位。如果已经用这些方法单独跑出了预测结果，可以通过：
+
+```bash
+--external-predictions-csv external_method_predictions.csv
+```
+
+传入，格式至少包含：
+
+```text
+method,ko_target,pred_delta_<feature1>,pred_delta_<feature2>,...
+```
+
+如果没有外部预测文件，报告会把这些方法标为 `not_run`，不会假装已经比较。
+
+## Hard-constrained 轻量生成器
+
+在稳定 baseline 之上，可以训练一个只学习局部不确定性的 residual generator：
+
+```bash
+python -m vkx.cli train-hard-generator \
+  --state-csvs results/dataset1/derived_state_scores.csv,results/dataset2/derived_state_scores.csv \
+  --ko-col ko_target \
+  --target-kos STAT1,STAT1+JAK2 \
+  --prior-dir data/priors \
+  --samples-per-ko 300 \
+  --max-residual-fraction 0.35 \
+  --out-dir results/hard_constrained_generator
+```
+
+生成细胞遵循：
+
+```text
+virtual cell = control cell + VKX baseline KO delta + bounded learned residual
+```
+
+也就是说，generator 不能自由改变 KO 主方向，只能学习方向附近的细胞间波动。如果 PyTorch 可用，会训练轻量 residual VAE；如果不可用，会退回 PCA residual sampler，并在报告里明确说明。
+
 ## 当前还缺什么？
 
 1. 需要更正式的横向 benchmark，把 VKX 与 ridge/PLS、scGen、CPA、GEARS、CellOT 等方法在同一批数据上比较。
 2. 真正公开 RNA+ADT+ATAC+genetic perturbation labelled benchmark 仍未确认；找到后才能升级为 full trimodal labelled benchmark。
-3. 当前 VAE/flow/diffusion 入口仍以 hard-constrained residual uncertainty 为主，完整神经生成模型需要更多同类型 perturbation 数据后再训练。
+3. 当前已加入 hard-constrained residual generator；完整 scGen/CPA/GEARS/CellOT 比较需要外部方法预测文件或对应环境。
 4. MAPK/TGFB 等强非线性 program 仍是困难案例，需要更强 pathway/TF/PPI/motif 先验和非线性修正。
 5. 可视化已经能自动生成，但论文级多 panel figure 还需要针对最终 benchmark 再统一排版。
 

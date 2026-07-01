@@ -246,6 +246,59 @@ def run_summarize_result(args: argparse.Namespace) -> None:
     print(f"  feature diagnosis rows: {len(result['diagnosis_feature'])}")
 
 
+def run_formal_benchmark_command(args: argparse.Namespace) -> None:
+    from .formal_benchmark import run_formal_benchmark
+    from .figure_pack import make_figure_package
+
+    methods = [part.strip() for part in (args.methods or "").split(",") if part.strip()] or None
+    result = run_formal_benchmark(
+        state_csv=args.state_csv,
+        ko_col=args.ko_col,
+        target_kos=target_labels(args),
+        prior_dir=args.prior_dir,
+        out_dir=args.out_dir,
+        features=parse_features(args.features),
+        methods=methods,
+        external_predictions_csv=args.external_predictions_csv,
+        calibrate=args.calibrate,
+        shape_calibrate=args.shape_calibrate,
+        seed=args.seed,
+    )
+    make_figure_package(args.out_dir, Path(args.out_dir) / "figure_package")
+    print("Saved formal benchmark outputs:")
+    print(f"  metrics: {args.out_dir}\\formal_benchmark_metrics.csv")
+    print(f"  method comparison: {args.out_dir}\\method_metric_comparison.csv")
+    print(f"  report: {args.out_dir}\\formal_benchmark_report.md")
+    print(f"  figure package: {args.out_dir}\\figure_package\\figure_package_report.md")
+    print(f"  scored rows: {len(result['metrics'])}")
+
+
+def run_train_hard_generator_command(args: argparse.Namespace) -> None:
+    from .hard_generator import train_hard_constrained_generator
+    from .figure_pack import make_figure_package
+
+    state_csvs = [part.strip() for part in args.state_csvs.split(",") if part.strip()]
+    result = train_hard_constrained_generator(
+        state_csvs=state_csvs,
+        ko_col=args.ko_col,
+        target_kos=target_labels(args),
+        prior_dir=args.prior_dir,
+        out_dir=args.out_dir,
+        features=parse_features(args.features),
+        samples_per_ko=args.samples_per_ko,
+        max_residual_fraction=args.max_residual_fraction,
+        epochs=args.epochs,
+        seed=args.seed,
+    )
+    make_figure_package(args.out_dir, Path(args.out_dir) / "figure_package")
+    print("Saved hard-constrained generator outputs:")
+    print(f"  virtual cells: {args.out_dir}\\hard_generator_virtual_cells.csv")
+    print(f"  intervals: {args.out_dir}\\hard_generator_intervals.csv")
+    print(f"  metrics: {args.out_dir}\\hard_generator_metrics.csv")
+    print(f"  report: {args.out_dir}\\hard_generator_report.md")
+    print(f"  backend: {result['model_status']}")
+
+
 def run_assemble_multiome(args: argparse.Namespace) -> None:
     from .multiome import assemble_multiome_benchmark
 
@@ -611,6 +664,31 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--result-dir", required=True, help="Existing VKX result directory containing delta_table.csv or predicted_ko_delta.csv.")
     summarize.add_argument("--out-dir", default=None, help="Output directory. Default: result-dir/readable_result_report.")
     summarize.set_defaults(func=run_summarize_result)
+    formal = sub.add_parser("formal-benchmark", help="Run a formal method benchmark: VKX vs PLS/Ridge/Additive plus external scGen/CPA/GEARS/CellOT predictions when provided.")
+    formal.add_argument("--state-csv", required=True, help="State score CSV with one row per cell, KO labels, and numeric state features.")
+    formal.add_argument("--ko-col", default="ko_target")
+    formal.add_argument("--target-kos", required=True, help="Comma-separated held-out KO targets, e.g. STAT1,JAK2,STAT1+JAK2.")
+    formal.add_argument("--prior-dir", default="data/priors")
+    formal.add_argument("--methods", default="vkx,pls,ridge,additive,scgen,cpa,gears,cellot")
+    formal.add_argument("--external-predictions-csv", default=None, help="Optional predictions from scGen/CPA/GEARS/CellOT with method, ko_target, and pred_delta_* columns.")
+    formal.add_argument("--features", default=None)
+    formal.add_argument("--calibrate", choices=["auto", "none", "global_scale", "feature_scale"], default="auto")
+    formal.add_argument("--shape-calibrate", choices=["none", "variance", "quantile"], default="none")
+    formal.add_argument("--seed", type=int, default=7)
+    formal.add_argument("--out-dir", default="results/formal_method_benchmark")
+    formal.set_defaults(func=run_formal_benchmark_command)
+    hard_gen = sub.add_parser("train-hard-generator", help="Train a lightweight hard-constrained residual generator from one or more perturbation state CSVs.")
+    hard_gen.add_argument("--state-csvs", required=True, help="Comma-separated state CSV files. They must share state feature names.")
+    hard_gen.add_argument("--ko-col", default="ko_target")
+    hard_gen.add_argument("--target-kos", required=True, help="Comma-separated KO targets to generate.")
+    hard_gen.add_argument("--prior-dir", default="data/priors")
+    hard_gen.add_argument("--features", default=None)
+    hard_gen.add_argument("--samples-per-ko", type=int, default=300)
+    hard_gen.add_argument("--max-residual-fraction", type=float, default=0.35, help="Hard bound on residual norm relative to baseline KO delta norm.")
+    hard_gen.add_argument("--epochs", type=int, default=80)
+    hard_gen.add_argument("--seed", type=int, default=11)
+    hard_gen.add_argument("--out-dir", default="results/hard_constrained_generator")
+    hard_gen.set_defaults(func=run_train_hard_generator_command)
     multiome = sub.add_parser("assemble-multiome", help="Assemble RNA and ATAC matrices plus KO metadata into one benchmark-ready h5ad.")
     multiome.add_argument("--rna-input", required=True)
     multiome.add_argument("--rna-format", required=True, choices=["h5ad", "10x_mtx", "10x_h5"])
