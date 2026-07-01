@@ -36,6 +36,8 @@ def make_paper_benchmark_package(
     _plot_roc_curves(roc_points, metrics, out)
     _plot_delta_heatmap(predictions, truth, out)
     _plot_result_gallery(result_summary, out)
+    _plot_adaptive_improvement(metrics, out)
+    _plot_benchmark_completeness(availability, result_summary, out)
     _copy_key_figures(formal_path, result_paths, out)
     _write_report(out, formal_path, result_paths, metrics, availability, result_summary)
     return {
@@ -237,6 +239,66 @@ def _plot_result_gallery(summary: pd.DataFrame, out: Path) -> None:
     )
 
 
+def _plot_adaptive_improvement(metrics: pd.DataFrame, out: Path) -> None:
+    if metrics.empty:
+        return
+    rows = metrics.copy()
+    for col in ["roc_auc", "direction_cosine", "r2", "mae"]:
+        rows[col] = pd.to_numeric(rows[col], errors="coerce")
+    focus = rows.loc[rows["method"].astype(str).isin(["VKXAdaptive", "ResponseBoosted", "ConstrainedEnsemble", "PLS", "Ridge", "VKX"])].copy()
+    if focus.empty:
+        return
+    focus["_label"] = focus["method"].map(_method_short)
+    _draw_metric_table(
+        rows=focus.sort_values(["roc_auc", "r2"], ascending=False),
+        out_path=out / "05_adaptive_improvement.png",
+        title="Adaptive VKX improvement and baseline matching",
+        subtitle="VKX-Adaptive selects a stable anchor by cross-validation so the small-sample model can match strong classical baselines.",
+        label_col="_label",
+        metric_specs=[
+            ("roc_auc", "AUC", 0.0, 1.0, False),
+            ("direction_cosine", "Direction", 0.0, 1.0, False),
+            ("r2", "R2", -0.5, 1.0, False),
+            ("mae", "MAE", 0.0, max(0.01, float(focus["mae"].max(skipna=True) or 0.01)), True),
+        ],
+        extra_col="method",
+    )
+
+
+def _plot_benchmark_completeness(availability: pd.DataFrame, result_summary: pd.DataFrame, out: Path) -> None:
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        return
+    width, height = 1500, 760
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    title_font = _pil_font(26)
+    font = _pil_font(17)
+    small = _pil_font(13)
+    draw.text((36, 28), "Benchmark completeness and remaining gaps", fill=(18, 18, 18), font=title_font)
+    draw.text((36, 64), "Completed evidence is separated from external methods or datasets that still need real inputs.", fill=(80, 80, 80), font=font)
+    checks = [
+        ("Same-data internal benchmark", True, "VKX variants, PLS, Ridge and ensemble are scored together."),
+        ("AUC shown as ROC curve", True, "Curve points are generated from held-out KO tasks."),
+        ("Single-KO result figure", _has_task(result_summary, "single"), "Papalexi RNA+ADT example."),
+        ("Double-KO result figure", _has_task(result_summary, "double"), "Norman/HMPCITE examples."),
+        ("ATAC peak-level result figure", _has_task(result_summary, "atac"), "scPerturb ATAC peak-level example."),
+        ("scGen/CPA/GEARS/CellOT scored", _external_scored(availability), "Requires external prediction CSV from those methods."),
+        ("Full RNA+ADT+ATAC labelled benchmark", False, "Still needs a confirmed public labelled trimodal dataset."),
+    ]
+    y = 120
+    for label, done, note in checks:
+        color = (42, 157, 143) if done else (210, 110, 80)
+        mark = "DONE" if done else "GAP"
+        draw.rounded_rectangle((36, y, 150, y + 36), radius=6, fill=color)
+        draw.text((61, y + 9), mark, fill=(255, 255, 255), font=small)
+        draw.text((178, y + 3), label, fill=(25, 25, 25), font=font)
+        draw.text((585, y + 7), note, fill=(85, 85, 85), font=small)
+        y += 70
+    img.save(out / "06_benchmark_completeness.png")
+
+
 def _copy_key_figures(formal_dir: Path, result_dirs: list[Path], out: Path) -> None:
     asset_dir = out / "assets"
     if asset_dir.exists():
@@ -308,6 +370,10 @@ def _write_report(
         "![Real vs virtual heatmap](03_real_vs_virtual_method_heatmap.png)",
         "",
         "![Result gallery](04_single_double_multimodal_gallery.png)",
+        "",
+        "![Adaptive improvement](05_adaptive_improvement.png)",
+        "",
+        "![Benchmark completeness](06_benchmark_completeness.png)",
         "",
         "## Best current method in the formal benchmark",
         "",
@@ -458,7 +524,7 @@ def _draw_main_roc_panel(draw, roc_points: pd.DataFrame, metrics: pd.DataFrame, 
         draw.text((left - 28, ty - 8), f"{tick:g}", fill=(60, 60, 60), font=tiny)
     draw.line((left, top + size, left + size, top), fill=(165, 165, 165))
     colors = _method_colors()
-    order = ["ResponseBoosted", "ConstrainedEnsemble", "Ridge", "PLS", "VKX"]
+    order = ["VKXAdaptive", "ResponseBoosted", "ConstrainedEnsemble", "Ridge", "PLS", "VKX"]
     legend_y = top + 15
     for method in order:
         group = roc_points.loc[roc_points["method"].astype(str) == method]
@@ -723,6 +789,7 @@ def _delta_color(value: float, vmax: float) -> tuple[int, int, int]:
 
 def _method_colors() -> dict[str, tuple[int, int, int]]:
     return {
+        "VKXAdaptive": (38, 70, 83),
         "ResponseBoosted": (231, 111, 81),
         "VKX": (231, 111, 81),
         "ConstrainedEnsemble": (42, 157, 143),
@@ -739,6 +806,7 @@ def _method_colors() -> dict[str, tuple[int, int, int]]:
 
 def _method_short(method: object) -> str:
     return {
+        "VKXAdaptive": "VKX-Adaptive",
         "ResponseBoosted": "VKX-Boosted",
         "ConstrainedEnsemble": "Ensemble",
         "CalibratedEnsemble": "Calibrated",
@@ -758,6 +826,23 @@ def _display_result_label(row: pd.Series) -> str:
     if "atac" in text.lower() or "ATAC" in task:
         return "scPerturb ATAC\npeak-level"
     return text.replace("_", " ")
+
+
+def _has_task(summary: pd.DataFrame, keyword: str) -> bool:
+    if summary.empty:
+        return False
+    fields = []
+    for col in ["task_type", "input_modality", "state_representation", "dataset"]:
+        if col in summary.columns:
+            fields.extend(summary[col].astype(str).str.lower().tolist())
+    return keyword.lower() in " ".join(fields)
+
+
+def _external_scored(availability: pd.DataFrame) -> bool:
+    if availability.empty or "method" not in availability.columns or "status" not in availability.columns:
+        return False
+    sub = availability.loc[availability["method"].astype(str).isin(EXTERNAL_METHOD_ORDER)]
+    return bool((sub["status"].astype(str) == "provided").any())
 
 
 def _feature_label(feature: object) -> str:

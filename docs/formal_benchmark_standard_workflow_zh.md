@@ -16,11 +16,12 @@ python -m vkx.cli formal-benchmark \
 默认比较方法已经改为：
 
 ```text
-boosted, ensemble, calibrated, vkx, pls, ridge, additive, scgen, cpa, gears, cellot
+adaptive, boosted, ensemble, calibrated, vkx, pls, ridge, additive, scgen, cpa, gears, cellot
 ```
 
 其中：
 
+- `adaptive` 是 VKX-Adaptive：在训练 KO 上做交叉验证，自动选择 PLS/Ridge/mean anchor；
 - `boosted` 是当前 VKX-Boosted；
 - `ensemble` 是 constrained PLS/Ridge anchor；
 - `calibrated` 是带幅度校准的 ensemble；
@@ -51,6 +52,7 @@ python -m vkx.cli paper-benchmark \
 | method | AUC | direction | R2 | MAE |
 |---|---:|---:|---:|---:|
 | PLS | 0.736 | 0.690 | 0.234 | 0.140 |
+| VKX-Adaptive | 0.736 | 0.690 | 0.234 | 0.140 |
 | CalibratedEnsemble | 0.667 | 0.659 | 0.065 | 0.162 |
 | VKX-Boosted | 0.625 | 0.608 | 0.184 | 0.139 |
 | Ensemble | 0.583 | 0.611 | 0.172 | 0.145 |
@@ -60,6 +62,7 @@ python -m vkx.cli paper-benchmark \
 解释：
 
 - PLS 在这个小型 benchmark 上 AUC 最高，说明传统 baseline 很强；
+- VKX-Adaptive 自动选择 PLS anchor，因此在这个 benchmark 上与 PLS 持平；
 - VKX-Boosted 不是 AUC 第一，但 MAE 最低，说明它在变化幅度误差上有优势；
 - 原始 VKX 明显较弱，说明 boosted/prior/calibrated anchor 是必要优化；
 - scGen/CPA/GEARS/CellOT 目前没有同数据预测文件，因此不能宣称 VKX 强过它们。

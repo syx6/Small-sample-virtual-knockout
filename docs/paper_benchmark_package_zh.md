@@ -18,7 +18,7 @@ python -m vkx.cli paper-benchmark \
 - 单敲、双敲、多模态、ATAC peak 是否都有结果；
 - 哪些结论可靠，哪些还不能宣传。
 
-`paper-benchmark` 的目的就是把这些问题收束成一张论文级主图、四张可单独查看的分图和一份报告。
+`paper-benchmark` 的目的就是把这些问题收束成一张论文级主图、六张可单独查看的分图和一份报告。总共会输出 7 张大图。
 
 ## 输出图
 
@@ -49,15 +49,24 @@ python -m vkx.cli paper-benchmark \
 
    单敲、双敲、多模态和 ATAC peak 结果总览图。它回答：VKX 是否只是在一个 RNA-only 示例上有效，还是能覆盖更广的输入场景。
 
+5. `05_adaptive_improvement.png`
+
+   VKX-Adaptive 与 PLS/Ridge/VKX-Boosted/原始 VKX 的直接比较图。它回答：经过 adaptive anchor selection 后，VKX 是否至少能追上强 classical baseline。
+
+6. `06_benchmark_completeness.png`
+
+   benchmark 完整性检查图。它把已经完成的证据和仍然缺口分开显示，避免把没有运行的外部方法误当成已比较结果。
+
 ## 当前结论
 
-当前标准 Papalexi 小型 state-score benchmark 中，`PLS` 的 AUC 最高，而 `ResponseBoosted` 是表现最好的 VKX 变体之一：
+当前标准 Papalexi 小型 state-score benchmark 中，`PLS` 和 `VKX-Adaptive` 的 AUC 并列最高，而 `ResponseBoosted` 是表现最好的 VKX 变体之一：
 
 - PLS AUC 约 0.736；
+- VKX-Adaptive AUC 约 0.736；
 - VKX-Boosted AUC 约 0.625；
 - VKX-Boosted MAE 约 0.139，是当前 scored methods 中较低的误差。
 
-这说明加入 response-strength prior 后，VKX 相比原始 VKX 有进步，但也说明传统 PLS baseline 在这个小型数据上仍然很强，不能回避。
+这说明 adaptive anchor selection 能让 VKX 至少追上当前数据中的强 classical baseline；加入 response-strength prior 后，VKX-Boosted 在误差幅度上有优势。但传统 PLS baseline 在这个小型数据上仍然很强，不能回避。
 
 但是，这个结果仍然不能说明 VKX 已经强过 scGen、CPA、GEARS、CellOT。原因是这些外部深度方法还没有在同一数据、同一 holdout KO、同一指标下提供预测文件。
 

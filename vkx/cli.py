@@ -240,6 +240,8 @@ def run_paper_benchmark(args: argparse.Namespace) -> None:
     print(f"           {args.out_dir}\\02_auc_roc_curves.png")
     print(f"           {args.out_dir}\\03_real_vs_virtual_method_heatmap.png")
     print(f"           {args.out_dir}\\04_single_double_multimodal_gallery.png")
+    print(f"           {args.out_dir}\\05_adaptive_improvement.png")
+    print(f"           {args.out_dir}\\06_benchmark_completeness.png")
 
 
 def run_diagnose_results(args: argparse.Namespace) -> None:
@@ -708,7 +710,7 @@ def build_parser() -> argparse.ArgumentParser:
     formal.add_argument("--ko-col", default="ko_target")
     formal.add_argument("--target-kos", required=True, help="Comma-separated held-out KO targets, e.g. STAT1,JAK2,STAT1+JAK2.")
     formal.add_argument("--prior-dir", default="data/priors")
-    formal.add_argument("--methods", default="boosted,ensemble,calibrated,vkx,pls,ridge,additive,scgen,cpa,gears,cellot")
+    formal.add_argument("--methods", default="adaptive,boosted,ensemble,calibrated,vkx,pls,ridge,additive,scgen,cpa,gears,cellot")
     formal.add_argument("--external-predictions-csv", default=None, help="Optional predictions from scGen/CPA/GEARS/CellOT with method, ko_target, and pred_delta_* columns.")
     formal.add_argument("--features", default=None)
     formal.add_argument("--calibrate", choices=["auto", "none", "global_scale", "feature_scale"], default="auto")

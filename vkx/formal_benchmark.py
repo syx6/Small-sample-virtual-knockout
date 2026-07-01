@@ -27,11 +27,15 @@ def run_formal_benchmark(
     out.mkdir(parents=True, exist_ok=True)
     frame = pd.read_csv(state_csv)
     features = _feature_columns(frame, ko_col, features)
-    methods = methods or ["vkx", "boosted", "ensemble", "pls", "ridge", "additive", "scgen", "cpa", "gears", "cellot"]
+    methods = methods or ["adaptive", "boosted", "ensemble", "calibrated", "vkx", "pls", "ridge", "additive", "scgen", "cpa", "gears", "cellot"]
     methods = [_canonical_method(method) for method in methods]
 
     predictions = []
     availability = []
+    if "adaptive" in methods:
+        pred, status = _predict_adaptive_anchor(frame, ko_col, target_kos, prior_dir, features, seed=seed)
+        predictions.append(pred)
+        availability.append(status)
     if "vkx" in methods:
         pred, status = _predict_vkx(frame, ko_col, target_kos, prior_dir, features, calibrate, shape_calibrate, seed)
         predictions.append(pred)
@@ -105,6 +109,10 @@ def _canonical_method(method: str) -> str:
     text = method.strip().lower().replace("-", "").replace("_", "")
     aliases = {
         "vkx": "vkx",
+        "adaptive": "adaptive",
+        "vkxadaptive": "adaptive",
+        "adaptiveanchor": "adaptive",
+        "adaptiveensemble": "adaptive",
         "pls": "pls",
         "priorpls": "pls",
         "ridge": "ridge",
@@ -362,6 +370,95 @@ def _predict_response_boosted_anchor(
         f"mean_boosted_features={np.mean(boosted_events):.1f}."
     )
     return pred, {"method": "ResponseBoosted", "status": "run", "reason": reason}
+
+
+def _predict_adaptive_anchor(
+    frame: pd.DataFrame,
+    ko_col: str,
+    target_kos: list[str],
+    prior_dir: str | Path,
+    features: list[str],
+    seed: int,
+) -> tuple[pd.DataFrame, dict]:
+    try:
+        from .core import build_delta_table, fit_pls, ko_prior_vector, select_prior_terms, split_ko
+    except Exception as exc:
+        return pd.DataFrame(), {"method": "VKXAdaptive", "status": "failed", "reason": f"Missing core dependency: {exc}"}
+
+    holdout_set = set(target_kos)
+    perturb_genes = {gene for ko in frame[ko_col].astype(str).unique() for gene in split_ko(ko)}
+    terms = select_prior_terms(Path(prior_dir), perturb_genes)
+    labels, train_delta, _ = build_delta_table(frame, ko_col, features, holdout_set)
+    if len(labels) < 4:
+        pred, status = _predict_prior_model(frame, ko_col, target_kos, prior_dir, features, model_type="pls")
+        pred = pred.copy()
+        pred["method"] = "VKXAdaptive"
+        pred["adaptive_selected_anchor"] = "PLS"
+        return pred, {"method": "VKXAdaptive", "status": "run", "reason": "Too few training KOs for CV selection; fell back to PLS anchor."}
+
+    x_train = np.vstack([ko_prior_vector(label, terms) for label in labels])
+    oof = _kfold_oof_prior_predictions(labels, x_train, train_delta, terms, seed=seed, max_folds=min(5, len(labels)))
+    candidates = {
+        "PLS": oof["PLS"],
+        "Ridge": oof["Ridge"],
+        "MeanPLSRidge": 0.5 * oof["PLS"] + 0.5 * oof["Ridge"],
+    }
+    candidate_scores = {name: _adaptive_rank_score(train_delta, pred) for name, pred in candidates.items()}
+    selected = max(candidate_scores, key=candidate_scores.get)
+
+    pls_model = fit_pls(labels, train_delta, terms)
+    ridge_model = _fit_numpy_ridge(x_train, train_delta)
+    rows = []
+    for ko in target_kos:
+        x = ko_prior_vector(ko, terms).reshape(1, -1)
+        pls_pred = pls_model.predict(x).reshape(-1)
+        ridge_pred = _predict_numpy_ridge(ridge_model, x).reshape(-1)
+        if selected == "PLS":
+            pred = pls_pred
+        elif selected == "Ridge":
+            pred = ridge_pred
+        else:
+            pred = 0.5 * pls_pred + 0.5 * ridge_pred
+        out = {
+            "method": "VKXAdaptive",
+            "ko_target": ko,
+            "prediction_status": "ok",
+            "adaptive_selected_anchor": selected,
+            "adaptive_cv_score": candidate_scores[selected],
+            "adaptive_cv_scores": ";".join(f"{name}:{score:.4f}" for name, score in sorted(candidate_scores.items())),
+        }
+        for feature, value in zip(features, pred):
+            out[f"pred_delta_{feature}"] = value
+        rows.append(out)
+    reason = (
+        "Cross-validated small-sample anchor selection over PLS, Ridge and their mean. "
+        f"selected={selected}; scores="
+        + ", ".join(f"{name}={score:.3f}" for name, score in sorted(candidate_scores.items()))
+        + "."
+    )
+    return pd.DataFrame(rows), {"method": "VKXAdaptive", "status": "run", "reason": reason}
+
+
+def _adaptive_rank_score(truth: np.ndarray, pred: np.ndarray) -> float:
+    scores = []
+    for y_true, y_pred in zip(truth, pred):
+        mask = np.isfinite(y_true) & np.isfinite(y_pred)
+        if mask.sum() < 3:
+            continue
+        yt = y_true[mask]
+        yp = y_pred[mask]
+        auc = _auc(np.abs(yt), np.abs(yp))
+        direction = _cosine(yt, yp)
+        r2 = _r2(yt, yp)
+        mae = float(np.mean(np.abs(yp - yt)))
+        score = (
+            (auc if np.isfinite(auc) else 0.0)
+            + 0.25 * (direction if np.isfinite(direction) else 0.0)
+            + 0.15 * (r2 if np.isfinite(r2) else -1.0)
+            - 0.25 * mae
+        )
+        scores.append(score)
+    return float(np.mean(scores)) if scores else -np.inf
 
 
 def _response_boost_family(feature: str) -> str:
