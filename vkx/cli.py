@@ -213,6 +213,19 @@ def run_figure_package(args: argparse.Namespace) -> None:
     print(f"  figures: {len(index)}")
 
 
+def run_aggregate_benchmarks(args: argparse.Namespace) -> None:
+    from .aggregate import aggregate_benchmarks
+
+    result_dirs = [part.strip() for part in args.result_dirs.split(",") if part.strip()]
+    result = aggregate_benchmarks(result_dirs, args.out_dir)
+    print("Saved aggregate benchmark report:")
+    print(f"  report: {args.out_dir}\\aggregate_benchmark_report.md")
+    print(f"  formal rows: {len(result['formal'])}")
+    print(f"  generator rows: {len(result['generators'])}")
+    print(f"  formal figure: {args.out_dir}\\01_formal_benchmark_leaderboard.png")
+    print(f"  generator figure: {args.out_dir}\\02_hard_generator_leaderboard.png")
+
+
 def run_diagnose_results(args: argparse.Namespace) -> None:
     from .diagnostics import diagnose_virtual_ko_results
 
@@ -652,6 +665,10 @@ def build_parser() -> argparse.ArgumentParser:
     figures.add_argument("--result-dir", required=True, help="Existing result directory to scan.")
     figures.add_argument("--out-dir", default=None, help="Output directory. Default: result-dir/figure_package.")
     figures.set_defaults(func=run_figure_package)
+    aggregate = sub.add_parser("aggregate-benchmarks", help="Aggregate multiple formal benchmark and hard-generator result directories into one leaderboard report.")
+    aggregate.add_argument("--result-dirs", required=True, help="Comma-separated result directories, or a parent directory such as results.")
+    aggregate.add_argument("--out-dir", default="results/aggregate_benchmark_report")
+    aggregate.set_defaults(func=run_aggregate_benchmarks)
     diagnose = sub.add_parser("diagnose-results", help="Explain which virtual KO results are reliable or risky and why.")
     diagnose.add_argument("--delta-csv", required=True, help="delta_table.csv from evaluation or predicted_ko_delta.csv from apply-reference.")
     diagnose.add_argument("--manifest-csv", default=None, help="Optional derived_state_manifest.csv for modality-aware explanations.")
