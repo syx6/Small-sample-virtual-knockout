@@ -27,7 +27,7 @@ def run_formal_benchmark(
     out.mkdir(parents=True, exist_ok=True)
     frame = pd.read_csv(state_csv)
     features = _feature_columns(frame, ko_col, features)
-    methods = methods or ["vkx", "ensemble", "pls", "ridge", "additive", "scgen", "cpa", "gears", "cellot"]
+    methods = methods or ["vkx", "boosted", "ensemble", "pls", "ridge", "additive", "scgen", "cpa", "gears", "cellot"]
     methods = [_canonical_method(method) for method in methods]
 
     predictions = []
@@ -46,6 +46,14 @@ def run_formal_benchmark(
         availability.append(status)
     if "ensemble" in methods:
         pred, status = _predict_constrained_ensemble(frame, ko_col, target_kos, prior_dir, features, seed=seed)
+        predictions.append(pred)
+        availability.append(status)
+    if "calibrated" in methods:
+        pred, status = _predict_calibrated_ensemble(frame, ko_col, target_kos, prior_dir, features, seed=seed)
+        predictions.append(pred)
+        availability.append(status)
+    if "boosted" in methods:
+        pred, status = _predict_response_boosted_anchor(frame, ko_col, target_kos, prior_dir, features, seed=seed)
         predictions.append(pred)
         availability.append(status)
     if "additive" in methods:
@@ -103,6 +111,12 @@ def _canonical_method(method: str) -> str:
         "ensemble": "ensemble",
         "constrainedensemble": "ensemble",
         "vkxensemble": "ensemble",
+        "calibrated": "calibrated",
+        "calibratedensemble": "calibrated",
+        "amplitudecalibrated": "calibrated",
+        "boosted": "boosted",
+        "responseboosted": "boosted",
+        "priorboosted": "boosted",
         "additive": "additive",
         "scgen": "scgen",
         "cpa": "cpa",
@@ -245,6 +259,146 @@ def _inverse_error_weights(errors: dict[str, float]) -> dict[str, float]:
         return {name: 1.0 / len(errors) for name in errors}
     total = sum(inv.values())
     return {name: inv.get(name, 0.0) / total for name in errors}
+
+
+def _predict_calibrated_ensemble(
+    frame: pd.DataFrame,
+    ko_col: str,
+    target_kos: list[str],
+    prior_dir: str | Path,
+    features: list[str],
+    seed: int,
+) -> tuple[pd.DataFrame, dict]:
+    try:
+        from .core import build_delta_table, fit_pls, ko_prior_vector, select_prior_terms, split_ko
+    except Exception as exc:
+        return pd.DataFrame(), {"method": "CalibratedEnsemble", "status": "failed", "reason": f"Missing core dependency: {exc}"}
+
+    holdout_set = set(target_kos)
+    perturb_genes = {gene for ko in frame[ko_col].astype(str).unique() for gene in split_ko(ko)}
+    terms = select_prior_terms(Path(prior_dir), perturb_genes)
+    labels, train_delta, _ = build_delta_table(frame, ko_col, features, holdout_set)
+    if len(labels) < 4:
+        return pd.DataFrame(), {"method": "CalibratedEnsemble", "status": "failed", "reason": "Need at least four training KOs for calibrated ensemble."}
+
+    x_train = np.vstack([ko_prior_vector(label, terms) for label in labels])
+    oof = _kfold_oof_prior_predictions(labels, x_train, train_delta, terms, seed=seed)
+    calibration = {}
+    errors = {}
+    for name, pred in oof.items():
+        beta = _global_amplitude_scale(pred, train_delta)
+        calibrated_pred = beta * pred
+        calibration[name] = beta
+        errors[name] = float(np.mean(np.abs(calibrated_pred - train_delta)))
+    weights = _inverse_error_weights(errors)
+
+    pls_model = fit_pls(labels, train_delta, terms)
+    ridge_model = _fit_numpy_ridge(x_train, train_delta)
+    rows = []
+    for ko in target_kos:
+        x = ko_prior_vector(ko, terms).reshape(1, -1)
+        pls_pred = calibration["PLS"] * pls_model.predict(x).reshape(-1)
+        ridge_pred = calibration["Ridge"] * _predict_numpy_ridge(ridge_model, x).reshape(-1)
+        pred = weights["PLS"] * pls_pred + weights["Ridge"] * ridge_pred
+        out = {
+            "method": "CalibratedEnsemble",
+            "ko_target": ko,
+            "prediction_status": "ok",
+            "ensemble_weight_pls": weights["PLS"],
+            "ensemble_weight_ridge": weights["Ridge"],
+            "amplitude_scale_pls": calibration["PLS"],
+            "amplitude_scale_ridge": calibration["Ridge"],
+        }
+        for feature, value in zip(features, pred):
+            out[f"pred_delta_{feature}"] = value
+        rows.append(out)
+    reason = (
+        "K-fold out-of-fold weighted PLS/Ridge anchor with global amplitude calibration. "
+        f"weights: PLS={weights['PLS']:.2f}, Ridge={weights['Ridge']:.2f}; "
+        f"scales: PLS={calibration['PLS']:.2f}, Ridge={calibration['Ridge']:.2f}."
+    )
+    return pd.DataFrame(rows), {"method": "CalibratedEnsemble", "status": "run", "reason": reason}
+
+
+def _predict_response_boosted_anchor(
+    frame: pd.DataFrame,
+    ko_col: str,
+    target_kos: list[str],
+    prior_dir: str | Path,
+    features: list[str],
+    seed: int,
+    boost: float = 1.5,
+) -> tuple[pd.DataFrame, dict]:
+    pred, status = _predict_constrained_ensemble(frame, ko_col, target_kos, prior_dir, features, seed=seed)
+    if pred.empty:
+        return pred, {"method": "ResponseBoosted", "status": status.get("status", "failed"), "reason": status.get("reason", "Base ensemble failed.")}
+    boosted_features = [feature for feature in features if _response_boost_family(feature) != "other"]
+    if not boosted_features:
+        pred = pred.copy()
+        pred["method"] = "ResponseBoosted"
+        return pred, {"method": "ResponseBoosted", "status": "run", "reason": "No response-family features were detected; output equals the constrained ensemble."}
+    pred = pred.copy()
+    pred["method"] = "ResponseBoosted"
+    for feature in boosted_features:
+        col = f"pred_delta_{feature}"
+        if col in pred.columns:
+            pred[col] = pred[col] * boost
+    reason = (
+        "Constrained ensemble plus response-strength prior boost for interferon/JAK/STAT-like state features. "
+        f"boost={boost:.2f}; boosted_features={len(boosted_features)}."
+    )
+    return pred, {"method": "ResponseBoosted", "status": "run", "reason": reason}
+
+
+def _response_boost_family(feature: str) -> str:
+    text = str(feature).lower()
+    if any(key in text for key in ["interferon", "jak", "stat", "ifn"]):
+        return "ifn_jak_stat"
+    return "other"
+
+
+def _kfold_oof_prior_predictions(
+    labels: list[str],
+    x_train: np.ndarray,
+    train_delta: np.ndarray,
+    terms: list[str],
+    seed: int,
+    max_folds: int = 3,
+) -> dict[str, np.ndarray]:
+    from .core import fit_pls
+
+    n = len(labels)
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(n)
+    folds = np.array_split(order, min(max_folds, n))
+    out = {
+        "PLS": np.zeros_like(train_delta, dtype=float),
+        "Ridge": np.zeros_like(train_delta, dtype=float),
+    }
+    for fold in folds:
+        keep = np.ones(n, dtype=bool)
+        keep[fold] = False
+        fold_labels = [labels[i] for i in np.where(keep)[0]]
+        pls = fit_pls(fold_labels, train_delta[keep], terms)
+        ridge = _fit_numpy_ridge(x_train[keep], train_delta[keep])
+        out["PLS"][fold] = pls.predict(x_train[fold])
+        out["Ridge"][fold] = _predict_numpy_ridge(ridge, x_train[fold])
+    return out
+
+
+def _global_amplitude_scale(pred: np.ndarray, truth: np.ndarray, min_scale: float = 0.5, max_scale: float = 3.0) -> float:
+    mask = np.isfinite(pred) & np.isfinite(truth)
+    if mask.sum() == 0:
+        return 1.0
+    p = pred[mask]
+    t = truth[mask]
+    denom = float(np.dot(p, p))
+    if denom <= 1e-9:
+        return 1.0
+    scale = float(np.dot(p, t) / denom)
+    if not np.isfinite(scale):
+        return 1.0
+    return float(np.clip(scale, min_scale, max_scale))
 
 
 def _fit_numpy_ridge(x_train: np.ndarray, y_train: np.ndarray) -> dict:

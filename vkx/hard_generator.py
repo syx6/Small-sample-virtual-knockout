@@ -111,14 +111,18 @@ def _baseline_delta(
             seed=seed,
         )
         return result.delta_table
-    from .formal_benchmark import _predict_constrained_ensemble, _predict_prior_model
+    from .formal_benchmark import _predict_calibrated_ensemble, _predict_constrained_ensemble, _predict_prior_model, _predict_response_boosted_anchor
 
     if method in {"pls", "ridge"}:
         pred, status = _predict_prior_model(frame, ko_col, target_kos, prior_dir, features, model_type=method)
     elif method in {"ensemble", "constrainedensemble", "vkxensemble"}:
         pred, status = _predict_constrained_ensemble(frame, ko_col, target_kos, prior_dir, features, seed=seed)
+    elif method in {"calibrated", "calibratedensemble", "amplitudecalibrated"}:
+        pred, status = _predict_calibrated_ensemble(frame, ko_col, target_kos, prior_dir, features, seed=seed)
+    elif method in {"boosted", "responseboosted", "priorboosted"}:
+        pred, status = _predict_response_boosted_anchor(frame, ko_col, target_kos, prior_dir, features, seed=seed)
     else:
-        raise ValueError("anchor_method must be one of vkx, pls, ridge, or ensemble.")
+        raise ValueError("anchor_method must be one of vkx, pls, ridge, ensemble, calibrated, or boosted.")
     if pred.empty:
         raise ValueError(f"Could not build generator anchor using {anchor_method}: {status.get('reason')}")
     rows = []
