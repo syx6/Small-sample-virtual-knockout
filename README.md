@@ -170,7 +170,7 @@ python -m vkx.cli formal-benchmark \
   --ko-col ko_target \
   --target-kos STAT1,JAK2,STAT1+JAK2 \
   --prior-dir data/priors \
-  --methods vkx,pls,ridge,additive,scgen,cpa,gears,cellot \
+  --methods vkx,ensemble,pls,ridge,additive,scgen,cpa,gears,cellot \
   --out-dir results/formal_method_benchmark
 ```
 
@@ -208,6 +208,7 @@ python -m vkx.cli train-hard-generator \
   --ko-col ko_target \
   --target-kos STAT1,STAT1+JAK2 \
   --prior-dir data/priors \
+  --anchor-method ensemble \
   --samples-per-ko 300 \
   --max-residual-fraction 0.35 \
   --out-dir results/hard_constrained_generator
@@ -219,7 +220,7 @@ python -m vkx.cli train-hard-generator \
 virtual cell = control cell + VKX baseline KO delta + bounded learned residual
 ```
 
-也就是说，generator 不能自由改变 KO 主方向，只能学习方向附近的细胞间波动。如果 PyTorch 可用，会训练轻量 residual VAE；如果不可用，会退回 PCA residual sampler，并在报告里明确说明。
+也就是说，generator 不能自由改变 KO 主方向，只能学习方向附近的细胞间波动。`--anchor-method` 可以选择 `vkx`、`pls`、`ridge` 或 `ensemble`；如果正式 benchmark 显示 Ridge/PLS 更稳定，推荐用 `ensemble` 作为 hard constraint 的锚点。PyTorch 可用时会训练轻量 residual VAE；如果不可用，会退回 PCA residual sampler，并在报告里明确说明。
 
 ## 当前还缺什么？
 

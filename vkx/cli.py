@@ -287,6 +287,7 @@ def run_train_hard_generator_command(args: argparse.Namespace) -> None:
         features=parse_features(args.features),
         samples_per_ko=args.samples_per_ko,
         max_residual_fraction=args.max_residual_fraction,
+        anchor_method=args.anchor_method,
         epochs=args.epochs,
         seed=args.seed,
     )
@@ -685,6 +686,7 @@ def build_parser() -> argparse.ArgumentParser:
     hard_gen.add_argument("--features", default=None)
     hard_gen.add_argument("--samples-per-ko", type=int, default=300)
     hard_gen.add_argument("--max-residual-fraction", type=float, default=0.35, help="Hard bound on residual norm relative to baseline KO delta norm.")
+    hard_gen.add_argument("--anchor-method", choices=["vkx", "pls", "ridge", "ensemble"], default="vkx", help="Mean KO delta anchor used before adding bounded residuals.")
     hard_gen.add_argument("--epochs", type=int, default=80)
     hard_gen.add_argument("--seed", type=int, default=11)
     hard_gen.add_argument("--out-dir", default="results/hard_constrained_generator")

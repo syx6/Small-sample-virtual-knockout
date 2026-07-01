@@ -27,7 +27,7 @@ def run_formal_benchmark(
     out.mkdir(parents=True, exist_ok=True)
     frame = pd.read_csv(state_csv)
     features = _feature_columns(frame, ko_col, features)
-    methods = methods or ["vkx", "pls", "ridge", "additive", "scgen", "cpa", "gears", "cellot"]
+    methods = methods or ["vkx", "ensemble", "pls", "ridge", "additive", "scgen", "cpa", "gears", "cellot"]
     methods = [_canonical_method(method) for method in methods]
 
     predictions = []
@@ -42,6 +42,10 @@ def run_formal_benchmark(
         availability.append(status)
     if "ridge" in methods:
         pred, status = _predict_prior_model(frame, ko_col, target_kos, prior_dir, features, model_type="ridge")
+        predictions.append(pred)
+        availability.append(status)
+    if "ensemble" in methods:
+        pred, status = _predict_constrained_ensemble(frame, ko_col, target_kos, prior_dir, features, seed=seed)
         predictions.append(pred)
         availability.append(status)
     if "additive" in methods:
@@ -93,6 +97,9 @@ def _canonical_method(method: str) -> str:
         "pls": "pls",
         "priorpls": "pls",
         "ridge": "ridge",
+        "ensemble": "ensemble",
+        "constrainedensemble": "ensemble",
+        "vkxensemble": "ensemble",
         "additive": "additive",
         "scgen": "scgen",
         "cpa": "cpa",
@@ -181,6 +188,60 @@ def _predict_prior_model(
             out[f"pred_delta_{feature}"] = value
         rows.append(out)
     return pd.DataFrame(rows), {"method": method_name, "status": "run", "reason": f"{method_name} prior-vector delta regression."}
+
+
+def _predict_constrained_ensemble(
+    frame: pd.DataFrame,
+    ko_col: str,
+    target_kos: list[str],
+    prior_dir: str | Path,
+    features: list[str],
+    seed: int,
+) -> tuple[pd.DataFrame, dict]:
+    del seed
+    try:
+        from .core import build_delta_table, fit_pls, ko_prior_vector, select_prior_terms, split_ko
+    except Exception as exc:
+        return pd.DataFrame(), {"method": "ConstrainedEnsemble", "status": "failed", "reason": f"Missing core dependency: {exc}"}
+
+    holdout_set = set(target_kos)
+    perturb_genes = {gene for ko in frame[ko_col].astype(str).unique() for gene in split_ko(ko)}
+    terms = select_prior_terms(Path(prior_dir), perturb_genes)
+    labels, train_delta, _ = build_delta_table(frame, ko_col, features, holdout_set)
+    x_train = np.vstack([ko_prior_vector(label, terms) for label in labels])
+    pls_model = fit_pls(labels, train_delta, terms)
+    ridge_model = _fit_numpy_ridge(x_train, train_delta)
+    pls_train_pred = pls_model.predict(x_train)
+    ridge_train_pred = _predict_numpy_ridge(ridge_model, x_train)
+    pls_mae = float(np.mean(np.abs(pls_train_pred - train_delta)))
+    ridge_mae = float(np.mean(np.abs(ridge_train_pred - train_delta)))
+    weights = _inverse_error_weights({"PLS": pls_mae, "Ridge": ridge_mae})
+    rows = []
+    for ko in target_kos:
+        x = ko_prior_vector(ko, terms).reshape(1, -1)
+        pls_pred = pls_model.predict(x).reshape(-1)
+        ridge_pred = _predict_numpy_ridge(ridge_model, x).reshape(-1)
+        pred = weights["PLS"] * pls_pred + weights["Ridge"] * ridge_pred
+        out = {
+            "method": "ConstrainedEnsemble",
+            "ko_target": ko,
+            "prediction_status": "ok",
+            "ensemble_weight_pls": weights["PLS"],
+            "ensemble_weight_ridge": weights["Ridge"],
+        }
+        for feature, value in zip(features, pred):
+            out[f"pred_delta_{feature}"] = value
+        rows.append(out)
+    reason = f"Training-error weighted PLS/Ridge anchor. weights: PLS={weights['PLS']:.2f}, Ridge={weights['Ridge']:.2f}."
+    return pd.DataFrame(rows), {"method": "ConstrainedEnsemble", "status": "run", "reason": reason}
+
+
+def _inverse_error_weights(errors: dict[str, float]) -> dict[str, float]:
+    inv = {name: 1.0 / max(value, 1e-6) for name, value in errors.items() if np.isfinite(value)}
+    if not inv:
+        return {name: 1.0 / len(errors) for name in errors}
+    total = sum(inv.values())
+    return {name: inv.get(name, 0.0) / total for name in errors}
 
 
 def _fit_numpy_ridge(x_train: np.ndarray, y_train: np.ndarray) -> dict:

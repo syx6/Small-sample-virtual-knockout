@@ -15,6 +15,7 @@ def train_hard_constrained_generator(
     features: list[str] | None = None,
     samples_per_ko: int = 300,
     max_residual_fraction: float = 0.35,
+    anchor_method: str = "vkx",
     epochs: int = 80,
     seed: int = 11,
 ) -> dict[str, pd.DataFrame | str]:
@@ -25,7 +26,7 @@ def train_hard_constrained_generator(
     residual_bank = _collect_residual_bank(frames, ko_col, features)
     residual_bank.to_csv(out / "generator_residual_bank.csv", index=False)
 
-    baseline = _baseline_delta(frames[0], ko_col, target_kos, prior_dir, features, seed)
+    baseline = _baseline_delta(frames[0], ko_col, target_kos, prior_dir, features, seed, anchor_method=anchor_method)
     model_status, sampler = _fit_residual_sampler(residual_bank[features].to_numpy(dtype=float), epochs=epochs, seed=seed)
     samples = _sample_hard_constrained(
         frame=frames[0],
@@ -43,7 +44,7 @@ def train_hard_constrained_generator(
     intervals.to_csv(out / "hard_generator_intervals.csv", index=False)
     metrics.to_csv(out / "hard_generator_metrics.csv", index=False)
     _plot_generator_outputs(samples, intervals, metrics, out)
-    _write_report(out, state_csvs, model_status, features, target_kos, max_residual_fraction)
+    _write_report(out, state_csvs, model_status, features, target_kos, max_residual_fraction, anchor_method)
     return {"samples": samples, "intervals": intervals, "metrics": metrics, "model_status": model_status}
 
 
@@ -79,23 +80,50 @@ def _collect_residual_bank(frames: list[pd.DataFrame], ko_col: str, features: li
     return pd.concat(rows, ignore_index=True)
 
 
-def _baseline_delta(frame: pd.DataFrame, ko_col: str, target_kos: list[str], prior_dir: str | Path, features: list[str], seed: int) -> pd.DataFrame:
-    from .core import run_virtual_ko
+def _baseline_delta(
+    frame: pd.DataFrame,
+    ko_col: str,
+    target_kos: list[str],
+    prior_dir: str | Path,
+    features: list[str],
+    seed: int,
+    anchor_method: str,
+) -> pd.DataFrame:
+    method = anchor_method.lower().replace("-", "").replace("_", "")
+    if method == "vkx":
+        from .core import run_virtual_ko
 
-    result = run_virtual_ko(
-        frame=frame,
-        ko_col=ko_col,
-        holdouts=target_kos,
-        prior_dir=prior_dir,
-        features=features,
-        dataset_name="hard constrained generator baseline",
-        modality="state score table",
-        representation="state scores",
-        calibrate="auto",
-        shape_calibrate="none",
-        seed=seed,
-    )
-    return result.delta_table
+        result = run_virtual_ko(
+            frame=frame,
+            ko_col=ko_col,
+            holdouts=target_kos,
+            prior_dir=prior_dir,
+            features=features,
+            dataset_name="hard constrained generator baseline",
+            modality="state score table",
+            representation="state scores",
+            calibrate="auto",
+            shape_calibrate="none",
+            seed=seed,
+        )
+        return result.delta_table
+    from .formal_benchmark import _predict_constrained_ensemble, _predict_prior_model
+
+    if method in {"pls", "ridge"}:
+        pred, status = _predict_prior_model(frame, ko_col, target_kos, prior_dir, features, model_type=method)
+    elif method in {"ensemble", "constrainedensemble", "vkxensemble"}:
+        pred, status = _predict_constrained_ensemble(frame, ko_col, target_kos, prior_dir, features, seed=seed)
+    else:
+        raise ValueError("anchor_method must be one of vkx, pls, ridge, or ensemble.")
+    if pred.empty:
+        raise ValueError(f"Could not build generator anchor using {anchor_method}: {status.get('reason')}")
+    rows = []
+    for _, row in pred.iterrows():
+        out = {"ko_target": row["ko_target"], "prediction_source": f"{anchor_method}_anchor"}
+        for feature in features:
+            out[f"pred_delta_{feature}"] = row.get(f"pred_delta_{feature}", np.nan)
+        rows.append(out)
+    return pd.DataFrame(rows)
 
 
 def _fit_residual_sampler(residuals: np.ndarray, epochs: int, seed: int):
@@ -323,16 +351,25 @@ def _plot_generator_fallback(intervals: pd.DataFrame, metrics: pd.DataFrame, out
     img2.save(out / "02_hard_generator_intervals.png")
 
 
-def _write_report(out: Path, state_csvs: list[str | Path], status: str, features: list[str], target_kos: list[str], max_fraction: float) -> None:
+def _write_report(
+    out: Path,
+    state_csvs: list[str | Path],
+    status: str,
+    features: list[str],
+    target_kos: list[str],
+    max_fraction: float,
+    anchor_method: str,
+) -> None:
     text = f"""# Hard-constrained Residual Generator
 
-This generator keeps the VKX baseline KO direction fixed and only learns single-cell residual variation around that direction.
+This generator keeps the selected baseline KO direction fixed and only learns single-cell residual variation around that direction.
 
 ## Training data
 
 - State CSV files: {len(state_csvs)}
 - Common state features: {len(features)}
 - Target KOs: {', '.join(target_kos)}
+- Anchor method: `{anchor_method}`
 - Residual backend: `{status}`
 - Hard residual bound: residual norm <= {max_fraction:.2f} x baseline delta norm
 
@@ -350,7 +387,7 @@ This generator keeps the VKX baseline KO direction fixed and only learns single-
 This is not an unconstrained free generator. A generated cell is:
 
 ```text
-control cell + VKX baseline KO delta + bounded learned residual
+control cell + selected baseline KO delta + bounded learned residual
 ```
 
 The residual is centered and norm-bounded so it cannot overwrite the predicted KO direction.
