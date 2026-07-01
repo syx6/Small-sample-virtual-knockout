@@ -226,6 +226,21 @@ def run_aggregate_benchmarks(args: argparse.Namespace) -> None:
     print(f"  generator figure: {args.out_dir}\\02_hard_generator_leaderboard.png")
 
 
+def run_paper_benchmark(args: argparse.Namespace) -> None:
+    from .paper_benchmark import make_paper_benchmark_package
+
+    result_dirs = [part.strip() for part in args.result_dirs.split(",") if part.strip()]
+    result = make_paper_benchmark_package(args.formal_dir, result_dirs, args.out_dir)
+    print("Saved paper benchmark package:")
+    print(f"  report: {args.out_dir}\\paper_benchmark_report_zh.md")
+    print(f"  method rows: {len(result['metrics'])}")
+    print(f"  result rows: {len(result['result_summary'])}")
+    print(f"  figures: {args.out_dir}\\01_method_leaderboard.png")
+    print(f"           {args.out_dir}\\02_auc_roc_curves.png")
+    print(f"           {args.out_dir}\\03_real_vs_virtual_method_heatmap.png")
+    print(f"           {args.out_dir}\\04_single_double_multimodal_gallery.png")
+
+
 def run_diagnose_results(args: argparse.Namespace) -> None:
     from .diagnostics import diagnose_virtual_ko_results
 
@@ -669,6 +684,11 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--result-dirs", required=True, help="Comma-separated result directories, or a parent directory such as results.")
     aggregate.add_argument("--out-dir", default="results/aggregate_benchmark_report")
     aggregate.set_defaults(func=run_aggregate_benchmarks)
+    paper = sub.add_parser("paper-benchmark", help="Build a paper-style benchmark figure package from formal benchmark and result directories.")
+    paper.add_argument("--formal-dir", required=True, help="Directory from formal-benchmark containing method_metric_comparison.csv and ROC points.")
+    paper.add_argument("--result-dirs", required=True, help="Comma-separated VKX result directories with summary.csv, heatmap, UMAP and AUC outputs.")
+    paper.add_argument("--out-dir", default="results/paper_benchmark_package")
+    paper.set_defaults(func=run_paper_benchmark)
     diagnose = sub.add_parser("diagnose-results", help="Explain which virtual KO results are reliable or risky and why.")
     diagnose.add_argument("--delta-csv", required=True, help="delta_table.csv from evaluation or predicted_ko_delta.csv from apply-reference.")
     diagnose.add_argument("--manifest-csv", default=None, help="Optional derived_state_manifest.csv for modality-aware explanations.")
