@@ -40,10 +40,14 @@ def train_hard_constrained_generator(
     )
     intervals = _intervals(samples, features)
     metrics = _evaluate_samples(samples, frames[0], ko_col, features)
+    delta_table = _generator_delta_table(samples, frames[0], ko_col, features)
+    pca_cells = _generator_pca_cells(samples, frames[0], ko_col, features, seed)
     samples.to_csv(out / "hard_generator_virtual_cells.csv", index=False)
     intervals.to_csv(out / "hard_generator_intervals.csv", index=False)
     metrics.to_csv(out / "hard_generator_metrics.csv", index=False)
-    _plot_generator_outputs(samples, intervals, metrics, out)
+    delta_table.to_csv(out / "hard_generator_delta_table.csv", index=False)
+    pca_cells.to_csv(out / "hard_generator_pca_cells.csv", index=False)
+    _plot_generator_outputs(samples, intervals, metrics, delta_table, pca_cells, out)
     _write_report(out, state_csvs, model_status, features, target_kos, max_residual_fraction, anchor_method)
     return {"samples": samples, "intervals": intervals, "metrics": metrics, "model_status": model_status}
 
@@ -276,12 +280,88 @@ def _evaluate_samples(samples: pd.DataFrame, frame: pd.DataFrame, ko_col: str, f
     return pd.DataFrame(rows)
 
 
-def _plot_generator_outputs(samples: pd.DataFrame, intervals: pd.DataFrame, metrics: pd.DataFrame, out: Path) -> None:
+def _generator_delta_table(samples: pd.DataFrame, frame: pd.DataFrame, ko_col: str, features: list[str]) -> pd.DataFrame:
+    from .core import control_mask
+
+    rows = []
+    control = frame.loc[control_mask(frame[ko_col]), features].mean().to_numpy(dtype=float)
+    for ko, generated in samples.groupby("ko_target", observed=True):
+        true = frame.loc[frame[ko_col].astype(str) == str(ko), features]
+        if true.empty:
+            continue
+        true_delta = true.mean().to_numpy(dtype=float) - control
+        pred_delta = generated[features].mean().to_numpy(dtype=float) - control
+        for feature, true_value, pred_value in zip(features, true_delta, pred_delta):
+            rows.append(
+                {
+                    "ko_target": ko,
+                    "feature": feature,
+                    "true_delta": float(true_value),
+                    "virtual_delta": float(pred_value),
+                    "error": float(pred_value - true_value),
+                    "abs_true_delta": float(abs(true_value)),
+                    "abs_error": float(abs(pred_value - true_value)),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _generator_pca_cells(samples: pd.DataFrame, frame: pd.DataFrame, ko_col: str, features: list[str], seed: int, max_per_group: int = 180) -> pd.DataFrame:
+    from .core import control_mask
+
+    rng = np.random.default_rng(seed)
+    rows = []
+    control = frame.loc[control_mask(frame[ko_col]), features + [ko_col]].copy()
+    control["plot_group"] = "control"
+    control["ko_target_plot"] = "control"
+    rows.append(_downsample(control, max_per_group, rng))
+    for ko in sorted(samples["ko_target"].astype(str).unique()):
+        true = frame.loc[frame[ko_col].astype(str) == ko, features + [ko_col]].copy()
+        if not true.empty:
+            true["plot_group"] = "true KO"
+            true["ko_target_plot"] = ko
+            rows.append(_downsample(true, max_per_group, rng))
+        generated = samples.loc[samples["ko_target"].astype(str) == ko, features].copy()
+        generated[ko_col] = ko
+        generated["plot_group"] = "virtual KO"
+        generated["ko_target_plot"] = ko
+        rows.append(_downsample(generated, max_per_group, rng))
+    if not rows:
+        return pd.DataFrame()
+    cells = pd.concat(rows, ignore_index=True)
+    x = cells[features].to_numpy(dtype=float)
+    x = np.nan_to_num(x, nan=np.nanmean(x))
+    x = x - x.mean(axis=0, keepdims=True)
+    try:
+        _, _, vt = np.linalg.svd(x, full_matrices=False)
+        coords = x @ vt[:2].T
+    except Exception:
+        coords = np.column_stack([x[:, 0], x[:, 1] if x.shape[1] > 1 else np.zeros(x.shape[0])])
+    cells["PC1"] = coords[:, 0]
+    cells["PC2"] = coords[:, 1]
+    return cells[[ko_col, "ko_target_plot", "plot_group", "PC1", "PC2"]]
+
+
+def _downsample(frame: pd.DataFrame, max_n: int, rng: np.random.Generator) -> pd.DataFrame:
+    if len(frame) <= max_n:
+        return frame
+    idx = rng.choice(frame.index.to_numpy(), size=max_n, replace=False)
+    return frame.loc[idx].copy()
+
+
+def _plot_generator_outputs(
+    samples: pd.DataFrame,
+    intervals: pd.DataFrame,
+    metrics: pd.DataFrame,
+    delta_table: pd.DataFrame,
+    pca_cells: pd.DataFrame,
+    out: Path,
+) -> None:
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns
     except Exception:
-        _plot_generator_fallback(intervals, metrics, out)
+        _plot_generator_fallback(intervals, metrics, delta_table, pca_cells, out)
         return
     if not metrics.empty:
         fig, axes = plt.subplots(1, 3, figsize=(13, 4.5), constrained_layout=True)
@@ -304,9 +384,59 @@ def _plot_generator_outputs(samples: pd.DataFrame, intervals: pd.DataFrame, metr
         ax.set_xlabel("generated state value")
         fig.savefig(out / "02_hard_generator_intervals.png", bbox_inches="tight", dpi=300)
         plt.close(fig)
+    _plot_generator_delta_heatmap(delta_table, out)
+    _plot_generator_pca(pca_cells, out)
 
 
-def _plot_generator_fallback(intervals: pd.DataFrame, metrics: pd.DataFrame, out: Path) -> None:
+def _plot_generator_delta_heatmap(delta_table: pd.DataFrame, out: Path, max_features: int = 14) -> None:
+    if delta_table.empty:
+        return
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+    except Exception:
+        return
+    chosen = (
+        delta_table.groupby("feature", observed=True)["abs_true_delta"]
+        .mean()
+        .sort_values(ascending=False)
+        .head(max_features)
+        .index.tolist()
+    )
+    rows = []
+    for row in delta_table.loc[delta_table["feature"].isin(chosen)].itertuples():
+        rows.append({"row": f"{row.ko_target} | true", "feature": _short(row.feature), "delta": row.true_delta})
+        rows.append({"row": f"{row.ko_target} | virtual", "feature": _short(row.feature), "delta": row.virtual_delta})
+        rows.append({"row": f"{row.ko_target} | error", "feature": _short(row.feature), "delta": row.error})
+    table = pd.DataFrame(rows).pivot_table(index="row", columns="feature", values="delta", aggfunc="mean")
+    vmax = max(float(np.nanmax(np.abs(table.to_numpy()))), 1e-9)
+    fig, ax = plt.subplots(figsize=(max(9, len(table.columns) * 0.7 + 3), max(4.5, len(table) * 0.34 + 1.8)), constrained_layout=True)
+    sns.heatmap(table, cmap="vlag", center=0, vmin=-vmax, vmax=vmax, ax=ax, cbar_kws={"label": "state delta"})
+    ax.set_title("Hard generator: true vs virtual KO state changes")
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    fig.savefig(out / "03_hard_generator_true_virtual_heatmap.png", bbox_inches="tight", dpi=300)
+    plt.close(fig)
+
+
+def _plot_generator_pca(pca_cells: pd.DataFrame, out: Path) -> None:
+    if pca_cells.empty:
+        return
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+    except Exception:
+        return
+    fig, ax = plt.subplots(figsize=(7.8, 6.2), constrained_layout=True)
+    palette = {"control": "#9E9E9E", "true KO": "#E76F51", "virtual KO": "#2A9D8F"}
+    sns.scatterplot(data=pca_cells, x="PC1", y="PC2", hue="plot_group", style="ko_target_plot", palette=palette, s=24, alpha=0.65, ax=ax)
+    ax.set_title("Cell-level state space: control, true KO and virtual KO")
+    ax.legend(frameon=False, fontsize=8, loc="best")
+    fig.savefig(out / "04_hard_generator_cell_state_pca.png", bbox_inches="tight", dpi=300)
+    plt.close(fig)
+
+
+def _plot_generator_fallback(intervals: pd.DataFrame, metrics: pd.DataFrame, delta_table: pd.DataFrame, pca_cells: pd.DataFrame, out: Path) -> None:
     try:
         from PIL import Image, ImageDraw, ImageFont
     except Exception:
@@ -349,6 +479,100 @@ def _plot_generator_fallback(intervals: pd.DataFrame, metrics: pd.DataFrame, out
         draw2.line((x1, y + 8, x2, y + 8), fill=(76, 120, 168), width=3)
         draw2.ellipse((xm - 3, y + 5, xm + 3, y + 11), fill=(231, 111, 81))
     img2.save(out / "02_hard_generator_intervals.png")
+    _plot_generator_delta_heatmap_fallback(delta_table, out)
+    _plot_generator_pca_fallback(pca_cells, out)
+
+
+def _plot_generator_delta_heatmap_fallback(delta_table: pd.DataFrame, out: Path) -> None:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return
+    if delta_table.empty:
+        return
+    chosen = (
+        delta_table.groupby("feature", observed=True)["abs_true_delta"]
+        .mean()
+        .sort_values(ascending=False)
+        .head(12)
+        .index.tolist()
+    )
+    rows = []
+    for row in delta_table.loc[delta_table["feature"].isin(chosen)].itertuples():
+        rows.append((f"{row.ko_target} | true", row.feature, row.true_delta))
+        rows.append((f"{row.ko_target} | virtual", row.feature, row.virtual_delta))
+        rows.append((f"{row.ko_target} | error", row.feature, row.error))
+    row_labels = list(dict.fromkeys([r[0] for r in rows]))
+    values = {(label, feature): value for label, feature, value in rows}
+    cell_w = 115
+    cell_h = 36
+    left = 245
+    top = 145
+    img = Image.new("RGB", (max(1300, left + cell_w * len(chosen) + 50), top + cell_h * len(row_labels) + 80), "white")
+    draw = ImageDraw.Draw(img)
+    font = _pil_font(15)
+    small = _pil_font(12)
+    title_font = _pil_font(24)
+    draw.text((30, 25), "Hard generator: true vs virtual KO state changes", fill=(20, 20, 20), font=title_font)
+    draw.text((30, 60), "Rows show observed KO delta, generated virtual KO delta, and prediction error.", fill=(80, 80, 80), font=font)
+    vmax = max(float(np.nanmax(np.abs([v for v in values.values()]))), 1e-9)
+    for j, feature in enumerate(chosen):
+        draw.text((left + j * cell_w, 100), _pretty_feature(feature, 15), fill=(30, 30, 30), font=small)
+    for i, label in enumerate(row_labels):
+        y = top + i * cell_h
+        draw.text((30, y + 9), _short(label, 28), fill=(30, 30, 30), font=font)
+        for j, feature in enumerate(chosen):
+            value = float(values.get((label, feature), np.nan))
+            if not np.isfinite(value):
+                color = (238, 238, 238)
+            elif value >= 0:
+                intensity = int(255 - 160 * min(abs(value) / vmax, 1))
+                color = (255, intensity, intensity)
+            else:
+                intensity = int(255 - 160 * min(abs(value) / vmax, 1))
+                color = (intensity, intensity, 255)
+            x = left + j * cell_w
+            draw.rectangle((x, y, x + cell_w - 3, y + cell_h - 3), fill=color, outline=(245, 245, 245))
+            if np.isfinite(value):
+                draw.text((x + 8, y + 10), f"{value:+.2f}", fill=(35, 35, 35), font=small)
+    img.save(out / "03_hard_generator_true_virtual_heatmap.png")
+
+
+def _plot_generator_pca_fallback(pca_cells: pd.DataFrame, out: Path) -> None:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return
+    if pca_cells.empty:
+        return
+    img = Image.new("RGB", (1050, 780), "white")
+    draw = ImageDraw.Draw(img)
+    font = _pil_font(15)
+    title_font = _pil_font(24)
+    draw.text((40, 25), "Cell-level state space: control, true KO and virtual KO", fill=(20, 20, 20), font=title_font)
+    draw.text((40, 60), "Virtual KO cells should move away from control and toward the real KO cloud.", fill=(80, 80, 80), font=font)
+    left, top, width, height = 100, 115, 690, 560
+    draw.rectangle((left, top, left + width, top + height), outline=(190, 190, 190))
+    x = pca_cells["PC1"].to_numpy(dtype=float)
+    y = pca_cells["PC2"].to_numpy(dtype=float)
+    xmin, xmax = float(np.nanmin(x)), float(np.nanmax(x))
+    ymin, ymax = float(np.nanmin(y)), float(np.nanmax(y))
+    xspan = max(xmax - xmin, 1e-9)
+    yspan = max(ymax - ymin, 1e-9)
+    colors = {"control": (158, 158, 158), "true KO": (231, 111, 81), "virtual KO": (42, 157, 143)}
+    for row in pca_cells.itertuples():
+        px = left + int((float(row.PC1) - xmin) / xspan * width)
+        py = top + height - int((float(row.PC2) - ymin) / yspan * height)
+        color = colors.get(str(row.plot_group), (80, 80, 80))
+        draw.ellipse((px - 3, py - 3, px + 3, py + 3), fill=color)
+    draw.text((left + 315, top + height + 32), "PC1", fill=(30, 30, 30), font=font)
+    draw.text((42, top + 270), "PC2", fill=(30, 30, 30), font=font)
+    legend_y = 130
+    for label, color in colors.items():
+        draw.ellipse((835, legend_y, 851, legend_y + 16), fill=color)
+        draw.text((865, legend_y - 1), label, fill=(30, 30, 30), font=font)
+        legend_y += 34
+    img.save(out / "04_hard_generator_cell_state_pca.png")
 
 
 def _write_report(
@@ -379,8 +603,12 @@ This generator keeps the selected baseline KO direction fixed and only learns si
 - `hard_generator_virtual_cells.csv`
 - `hard_generator_intervals.csv`
 - `hard_generator_metrics.csv`
+- `hard_generator_delta_table.csv`
+- `hard_generator_pca_cells.csv`
 - `01_hard_generator_metric_panel.png`
 - `02_hard_generator_intervals.png`
+- `03_hard_generator_true_virtual_heatmap.png`
+- `04_hard_generator_cell_state_pca.png`
 
 ## Interpretation
 
@@ -410,3 +638,23 @@ def _cosine(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 def _short(value: str, max_len: int = 34) -> str:
     value = str(value)
     return value if len(value) <= max_len else value[: max_len - 3] + "..."
+
+
+def _pretty_feature(value: str, max_len: int = 20) -> str:
+    text = str(value)
+    for prefix in ["pathway_", "protein_", "atac_", "tf_", "chromvar_", "peak_"]:
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    return _short(text, max_len)
+
+
+def _pil_font(size: int):
+    from PIL import ImageFont
+
+    for name in ["arial.ttf", "Arial.ttf", "DejaVuSans.ttf"]:
+        try:
+            return ImageFont.truetype(name, size=size)
+        except Exception:
+            continue
+    return ImageFont.load_default()

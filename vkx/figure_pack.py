@@ -19,8 +19,11 @@ FIGURE_EXPLANATIONS = {
     "01_formal_benchmark_metric_panel.png": "Formal method benchmark panel comparing VKX against baselines and external methods when available.",
     "02_formal_benchmark_delta_heatmap.png": "True and predicted KO deltas across benchmarked methods.",
     "03_method_availability.png": "Which methods were actually run, provided externally, or not run in this benchmark.",
-    "01_hard_generator_metric_panel.png": "Evaluation of hard-constrained residual generator while keeping VKX KO direction fixed.",
+    "04_formal_benchmark_roc_curves.png": "Full ROC curves showing whether each method ranks strong KO-responsive features above weak-response features.",
+    "01_hard_generator_metric_panel.png": "Evaluation of the hard-constrained residual generator while keeping the selected KO anchor direction fixed.",
     "02_hard_generator_intervals.png": "Feature-level uncertainty intervals sampled around the hard-constrained KO direction.",
+    "03_hard_generator_true_virtual_heatmap.png": "True KO, virtual KO and error deltas side by side for the strongest state features.",
+    "04_hard_generator_cell_state_pca.png": "Control, true KO and virtual KO cells in a low-dimensional state-space view.",
     "benchmark_overview.png": "Input benchmark readiness and perturbation label distribution.",
     "benchmark_modalities.png": "Detected RNA/protein/ATAC modality feature counts.",
     "double_interaction_metrics.png": "Single-gene additive vs interaction residual double-KO performance.",
@@ -33,6 +36,8 @@ def make_figure_package(result_dir: str | Path, out_dir: str | Path | None = Non
     out = Path(out_dir) if out_dir else result / "figure_package"
     asset_dir = out / "assets"
     out.mkdir(parents=True, exist_ok=True)
+    if asset_dir.exists():
+        shutil.rmtree(asset_dir)
     asset_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for path in sorted(result.rglob("*.png")):

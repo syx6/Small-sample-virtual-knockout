@@ -74,18 +74,21 @@ def run_formal_benchmark(
     prediction_table = pd.concat([p for p in predictions if not p.empty], ignore_index=True) if predictions else pd.DataFrame()
     true_table = _true_delta_table(frame, ko_col, target_kos, features)
     metrics = _score_predictions(prediction_table, true_table, features)
+    roc_points = _benchmark_roc_points(prediction_table, true_table, features)
     availability_table = pd.DataFrame(availability)
     prediction_table.to_csv(out / "formal_benchmark_predictions.csv", index=False)
     true_table.to_csv(out / "formal_benchmark_truth.csv", index=False)
     metrics.to_csv(out / "formal_benchmark_metrics.csv", index=False)
+    roc_points.to_csv(out / "formal_benchmark_roc_points.csv", index=False)
     _method_metric_comparison(metrics).to_csv(out / "method_metric_comparison.csv", index=False)
     availability_table.to_csv(out / "method_availability.csv", index=False)
-    _plot_benchmark_figures(metrics, prediction_table, true_table, availability_table, out, features)
+    _plot_benchmark_figures(metrics, prediction_table, true_table, availability_table, roc_points, out, features)
     _write_report(metrics, availability_table, out)
     return {
         "predictions": prediction_table,
         "truth": true_table,
         "metrics": metrics,
+        "roc_points": roc_points,
         "availability": availability_table,
     }
 
@@ -420,11 +423,45 @@ def _hit_rate(y_true: np.ndarray, y_pred: np.ndarray, top_fraction: float = 0.25
     return float(len(true_top & pred_top) / k)
 
 
+def _benchmark_roc_points(pred: pd.DataFrame, truth: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+    rows = []
+    if pred.empty or truth.empty:
+        return pd.DataFrame()
+    merged = pred.merge(truth, on="ko_target", how="inner")
+    for _, row in merged.iterrows():
+        y_true = np.asarray([row.get(f"true_delta_{feature}", np.nan) for feature in features], dtype=float)
+        y_pred = np.asarray([row.get(f"pred_delta_{feature}", np.nan) for feature in features], dtype=float)
+        mask = np.isfinite(y_true) & np.isfinite(y_pred)
+        if mask.sum() < 3:
+            continue
+        labels = np.abs(y_true[mask]) >= np.nanquantile(np.abs(y_true[mask]), 0.65)
+        scores = np.abs(y_pred[mask])
+        if labels.sum() == 0 or (~labels).sum() == 0:
+            continue
+        order = np.argsort(scores)[::-1]
+        tp = 0
+        fp = 0
+        pos = int(labels.sum())
+        neg = int((~labels).sum())
+        method = row["method"]
+        ko = row["ko_target"]
+        rows.append({"method": method, "ko_target": ko, "fpr": 0.0, "tpr": 0.0, "threshold_rank": 0})
+        for rank, idx in enumerate(order, start=1):
+            if labels[idx]:
+                tp += 1
+            else:
+                fp += 1
+            rows.append({"method": method, "ko_target": ko, "fpr": fp / neg, "tpr": tp / pos, "threshold_rank": rank})
+        rows.append({"method": method, "ko_target": ko, "fpr": 1.0, "tpr": 1.0, "threshold_rank": len(order) + 1})
+    return pd.DataFrame(rows)
+
+
 def _plot_benchmark_figures(
     metrics: pd.DataFrame,
     pred: pd.DataFrame,
     truth: pd.DataFrame,
     availability: pd.DataFrame,
+    roc_points: pd.DataFrame,
     out: Path,
     features: list[str],
 ) -> None:
@@ -432,7 +469,7 @@ def _plot_benchmark_figures(
         import matplotlib.pyplot as plt
         import seaborn as sns
     except Exception:
-        _plot_benchmark_fallback(metrics, pred, truth, availability, out, features)
+        _plot_benchmark_fallback(metrics, pred, truth, availability, roc_points, out, features)
         return
     if not metrics.empty:
         summary = _method_metric_comparison(metrics)
@@ -462,6 +499,43 @@ def _plot_benchmark_figures(
             ax.text(0.03, i, f"{row['status']}: {row['reason']}", va="center", color="white" if str(row["status"]).startswith("run") else "black", fontsize=8)
         fig.savefig(out / "03_method_availability.png", bbox_inches="tight", dpi=300)
         plt.close(fig)
+    _plot_benchmark_roc_curves(roc_points, metrics, out)
+
+
+def _plot_benchmark_roc_curves(roc_points: pd.DataFrame, metrics: pd.DataFrame, out: Path) -> None:
+    if roc_points.empty:
+        return
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        return
+    summary = _method_metric_comparison(metrics)
+    auc_map = dict(zip(summary["method"], summary["roc_auc"])) if not summary.empty else {}
+    colors = {
+        "ConstrainedEnsemble": "#2A9D8F",
+        "Ridge": "#4C78A8",
+        "PLS": "#F4A261",
+        "VKX": "#E76F51",
+        "Additive": "#8D99AE",
+        "scGen": "#7B2CBF",
+        "CPA": "#4361EE",
+        "GEARS": "#3A86FF",
+        "CellOT": "#6A994E",
+    }
+    fig, ax = plt.subplots(figsize=(7.2, 6.2), constrained_layout=True)
+    for method, group in roc_points.groupby("method", observed=True):
+        curve = group.groupby("fpr", as_index=False)["tpr"].mean().sort_values("fpr")
+        label = f"{method} AUC={auc_map.get(method, np.nan):.2f}" if method in auc_map else str(method)
+        ax.plot(curve["fpr"], curve["tpr"], marker="o", linewidth=2, markersize=3.5, color=colors.get(method, None), label=label)
+    ax.plot([0, 1], [0, 1], linestyle="--", color="0.55", linewidth=1)
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(-0.02, 1.02)
+    ax.set_xlabel("False positive rate")
+    ax.set_ylabel("True positive rate")
+    ax.set_title("ROC curves for strong-response feature ranking")
+    ax.legend(frameon=False, fontsize=8, loc="lower right")
+    fig.savefig(out / "04_formal_benchmark_roc_curves.png", bbox_inches="tight", dpi=300)
+    plt.close(fig)
 
 
 def _plot_prediction_heatmap(pred: pd.DataFrame, truth: pd.DataFrame, out: Path, features: list[str], max_features: int = 12) -> None:
@@ -502,6 +576,7 @@ def _plot_benchmark_fallback(
     pred: pd.DataFrame,
     truth: pd.DataFrame,
     availability: pd.DataFrame,
+    roc_points: pd.DataFrame,
     out: Path,
     features: list[str],
 ) -> None:
@@ -509,40 +584,111 @@ def _plot_benchmark_fallback(
         from PIL import Image, ImageDraw, ImageFont
     except Exception:
         return
-    img = Image.new("RGB", (1200, 640), "white")
+    img = Image.new("RGB", (1450, 760), "white")
     draw = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
-    draw.text((30, 30), "Formal Virtual KO Benchmark", fill=(20, 20, 20), font=font)
+    font = _pil_font(16)
+    small = _pil_font(13)
+    title_font = _pil_font(26)
+    draw.text((35, 28), "Formal Virtual KO Benchmark", fill=(20, 20, 20), font=title_font)
     if not metrics.empty:
         summary = _method_metric_comparison(metrics)
-        panels = [("roc_auc", "AUC", 70, 0.0, 1.0), ("direction_cosine", "Direction", 330, 0.0, 1.0), ("r2", "R2", 590, -1.0, 1.0), ("mae", "MAE lower", 850, 0.0, max(0.01, float(summary["mae"].max())))]
-        colors = {"VKX": (231, 111, 81), "PLS": (76, 120, 168), "Ridge": (42, 157, 143), "Additive": (158, 158, 158)}
+        best = summary.iloc[0]
+        draw.text(
+            (35, 67),
+            f"Best ranked method: {best['method']} | AUC {best['roc_auc']:.2f}, direction {best['direction_cosine']:.2f}, R2 {best['r2']:.2f}, MAE {best['mae']:.3f}",
+            fill=(70, 70, 70),
+            font=font,
+        )
+        panels = [
+            ("roc_auc", "AUC higher is better", 140, 0.0, 1.0),
+            ("direction_cosine", "Direction higher is better", 465, 0.0, 1.0),
+            ("r2", "R2 higher is better", 790, -1.0, 1.0),
+            ("mae", "MAE lower is better", 1115, 0.0, max(0.01, float(summary["mae"].max()))),
+        ]
+        colors = {
+            "ConstrainedEnsemble": (42, 157, 143),
+            "VKX": (231, 111, 81),
+            "PLS": (76, 120, 168),
+            "Ridge": (42, 157, 143),
+            "Additive": (158, 158, 158),
+        }
         for metric, title, x0, vmin, vmax in panels:
-            draw.text((x0, 70), title, fill=(30, 30, 30), font=font)
+            draw.text((x0, 125), title, fill=(30, 30, 30), font=font)
             for i, row in enumerate(summary.itertuples()):
-                y = 105 + i * 48
+                y = 170 + i * 66
                 method = str(row.method)
                 value = float(getattr(row, metric))
                 if metric == "mae":
-                    width = int(180 * (1.0 - min(max((value - vmin) / (vmax - vmin + 1e-9), 0), 1)))
+                    width = int(220 * (1.0 - min(max((value - vmin) / (vmax - vmin + 1e-9), 0), 1)))
                     label = f"{value:.3f}"
                 else:
-                    width = int(180 * min(max((value - vmin) / (vmax - vmin + 1e-9), 0), 1))
+                    width = int(220 * min(max((value - vmin) / (vmax - vmin + 1e-9), 0), 1))
                     label = f"{value:.2f}"
-                if x0 == 70:
-                    draw.text((30, y + 3), method, fill=(30, 30, 30), font=font)
-                draw.rectangle((x0, y, x0 + 180, y + 18), outline=(220, 220, 220), fill=(245, 245, 245))
-                draw.rectangle((x0, y, x0 + width, y + 18), fill=colors.get(method, (90, 90, 90)))
-                draw.text((x0 + 188, y + 3), label, fill=(30, 30, 30), font=font)
-    y = 330
-    draw.text((30, y), "Method availability", fill=(20, 20, 20), font=font)
-    y += 30
-    for _, row in availability.iterrows():
-        draw.text((30, y), f"{row['method']}: {row['status']} - {row['reason']}", fill=(80, 80, 80), font=font)
-        y += 24
+                if x0 == 140:
+                    draw.text((35, y + 8), _display_method(method), fill=(30, 30, 30), font=font)
+                draw.rectangle((x0, y, x0 + 220, y + 28), outline=(220, 220, 220), fill=(246, 246, 246))
+                draw.rectangle((x0, y, x0 + width, y + 28), fill=colors.get(method, (90, 90, 90)))
+                draw.text((x0 + 232, y + 5), label, fill=(30, 30, 30), font=small)
+        draw.text((35, 690), "Deep methods are included only when external prediction CSVs are provided. See 03_method_availability.png for run status.", fill=(80, 80, 80), font=small)
     img.save(out / "01_formal_benchmark_metric_panel.png")
     _plot_delta_heatmap_fallback(pred, truth, out, features)
     _plot_availability_fallback(availability, out)
+    _plot_roc_fallback(roc_points, metrics, out)
+
+
+def _plot_roc_fallback(roc_points: pd.DataFrame, metrics: pd.DataFrame, out: Path) -> None:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return
+    if roc_points.empty:
+        return
+    summary = _method_metric_comparison(metrics)
+    auc_map = dict(zip(summary["method"], summary["roc_auc"])) if not summary.empty else {}
+    colors = {
+        "ConstrainedEnsemble": (42, 157, 143),
+        "Ridge": (76, 120, 168),
+        "PLS": (244, 162, 97),
+        "VKX": (231, 111, 81),
+        "Additive": (141, 153, 174),
+    }
+    img = Image.new("RGB", (1100, 820), "white")
+    draw = ImageDraw.Draw(img)
+    font = _pil_font(18)
+    small = _pil_font(14)
+    title_font = _pil_font(24)
+    draw.text((45, 28), "ROC curves for strong-response feature ranking", fill=(20, 20, 20), font=title_font)
+    left, top, size = 115, 105, 600
+    draw.rectangle((left, top, left + size, top + size), outline=(180, 180, 180), width=1)
+    draw.line((left, top + size, left + size, top), fill=(160, 160, 160), width=1)
+    draw.text((left + 210, top + size + 42), "False positive rate", fill=(30, 30, 30), font=font)
+    draw.text((25, top + 265), "True positive rate", fill=(30, 30, 30), font=font)
+    for tick in [0.0, 0.5, 1.0]:
+        x_tick = left + int(tick * size)
+        y_tick = top + size - int(tick * size)
+        draw.line((x_tick, top + size, x_tick, top + size + 6), fill=(80, 80, 80))
+        draw.text((x_tick - 10, top + size + 10), f"{tick:.1f}", fill=(40, 40, 40), font=small)
+        draw.line((left - 6, y_tick, left, y_tick), fill=(80, 80, 80))
+        draw.text((left - 42, y_tick - 8), f"{tick:.1f}", fill=(40, 40, 40), font=small)
+    legend_y = 115
+    for method, group in roc_points.groupby("method", observed=True):
+        curve = group.groupby("fpr", as_index=False)["tpr"].mean().sort_values("fpr")
+        pts = []
+        for row in curve.itertuples():
+            x = left + int(float(row.fpr) * size)
+            y = top + size - int(float(row.tpr) * size)
+            pts.append((x, y))
+        color = colors.get(str(method), (80, 80, 80))
+        if len(pts) >= 2:
+            draw.line(pts, fill=color, width=3)
+        for x, y in pts:
+            draw.ellipse((x - 3, y - 3, x + 3, y + 3), fill=color)
+        draw.rectangle((760, legend_y, 784, legend_y + 16), fill=color)
+        auc = auc_map.get(method, np.nan)
+        label = f"{method}: AUC {auc:.2f}" if np.isfinite(auc) else str(method)
+        draw.text((796, legend_y - 2), label, fill=(30, 30, 30), font=small)
+        legend_y += 34
+    img.save(out / "04_formal_benchmark_roc_curves.png")
 
 
 def _plot_delta_heatmap_fallback(pred: pd.DataFrame, truth: pd.DataFrame, out: Path, features: list[str]) -> None:
@@ -647,6 +793,7 @@ def _write_report(metrics: pd.DataFrame, availability: pd.DataFrame, out: Path) 
         "- `01_formal_benchmark_metric_panel.png`",
         "- `02_formal_benchmark_delta_heatmap.png`",
         "- `03_method_availability.png`",
+        "- `04_formal_benchmark_roc_curves.png`",
     ]
     (out / "formal_benchmark_report.md").write_text("\n".join(text), encoding="utf-8")
 
@@ -654,3 +801,18 @@ def _write_report(metrics: pd.DataFrame, availability: pd.DataFrame, out: Path) 
 def _short(value: str, max_len: int = 38) -> str:
     value = str(value)
     return value if len(value) <= max_len else value[: max_len - 3] + "..."
+
+
+def _display_method(value: str) -> str:
+    return {"ConstrainedEnsemble": "Ensemble"}.get(str(value), str(value))
+
+
+def _pil_font(size: int):
+    from PIL import ImageFont
+
+    for name in ["arial.ttf", "Arial.ttf", "DejaVuSans.ttf"]:
+        try:
+            return ImageFont.truetype(name, size=size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
