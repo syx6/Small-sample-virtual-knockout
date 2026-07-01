@@ -327,25 +327,39 @@ def _predict_response_boosted_anchor(
     prior_dir: str | Path,
     features: list[str],
     seed: int,
-    boost: float = 1.5,
 ) -> tuple[pd.DataFrame, dict]:
+    from .core import split_ko
+
     pred, status = _predict_constrained_ensemble(frame, ko_col, target_kos, prior_dir, features, seed=seed)
     if pred.empty:
         return pred, {"method": "ResponseBoosted", "status": status.get("status", "failed"), "reason": status.get("reason", "Base ensemble failed.")}
-    boosted_features = [feature for feature in features if _response_boost_family(feature) != "other"]
-    if not boosted_features:
-        pred = pred.copy()
-        pred["method"] = "ResponseBoosted"
-        return pred, {"method": "ResponseBoosted", "status": "run", "reason": "No response-family features were detected; output equals the constrained ensemble."}
     pred = pred.copy()
     pred["method"] = "ResponseBoosted"
-    for feature in boosted_features:
-        col = f"pred_delta_{feature}"
-        if col in pred.columns:
-            pred[col] = pred[col] * boost
+    boosted_events = []
+    for idx, row in pred.iterrows():
+        ko_genes = split_ko(str(row["ko_target"]))
+        boosted_count = 0
+        max_boost = 1.0
+        boosted_families = set()
+        for feature in features:
+            family = _response_boost_family(feature)
+            factor = _response_boost_factor(ko_genes, family)
+            col = f"pred_delta_{feature}"
+            if col in pred.columns and factor != 1.0:
+                pred.at[idx, col] = pred.at[idx, col] * factor
+                pred.at[idx, f"boost_factor_{feature}"] = factor
+                pred.at[idx, f"boost_family_{feature}"] = family
+                boosted_count += 1
+                max_boost = max(max_boost, factor)
+                boosted_families.add(family)
+        pred.at[idx, "boosted_feature_count"] = boosted_count
+        pred.at[idx, "max_boost_factor"] = max_boost
+        pred.at[idx, "boosted_families"] = ";".join(sorted(boosted_families)) if boosted_families else "none"
+        boosted_events.append(boosted_count)
     reason = (
-        "Constrained ensemble plus response-strength prior boost for interferon/JAK/STAT-like state features. "
-        f"boost={boost:.2f}; boosted_features={len(boosted_features)}."
+        "Constrained ensemble plus adaptive response-strength priors. "
+        "Boost factors are selected from KO genes and feature families and are written into prediction metadata. "
+        f"mean_boosted_features={np.mean(boosted_events):.1f}."
     )
     return pred, {"method": "ResponseBoosted", "status": "run", "reason": reason}
 
@@ -354,7 +368,26 @@ def _response_boost_family(feature: str) -> str:
     text = str(feature).lower()
     if any(key in text for key in ["interferon", "jak", "stat", "ifn"]):
         return "ifn_jak_stat"
+    if any(key in text for key in ["mapk", "tgfb", "tgf_beta", "erk"]):
+        return "mapk_tgfb"
+    if any(key in text for key in ["myc", "e2f", "g2m", "cell_cycle", "mitotic"]):
+        return "cell_cycle_myc_e2f"
+    if text.startswith("protein_") and any(key in text for key in ["pdl1", "pdl2", "cd86", "cd366", "pdcd1", "ctla4"]):
+        return "protein_checkpoint"
     return "other"
+
+
+def _response_boost_factor(ko_genes: list[str], family: str) -> float:
+    genes = {gene.upper() for gene in ko_genes}
+    if family == "ifn_jak_stat" and any(gene.startswith(("STAT", "JAK", "IFN", "IRF")) for gene in genes):
+        return 1.5
+    if family == "mapk_tgfb" and any(gene.startswith(("MAPK", "RAF", "RAS", "MEK", "ERK", "TGFB", "SMAD")) for gene in genes):
+        return 1.35
+    if family == "cell_cycle_myc_e2f" and any(gene.startswith(("MYC", "E2F", "CDK", "CCN", "RB")) for gene in genes):
+        return 1.25
+    if family == "protein_checkpoint" and any(gene.startswith(("STAT", "JAK", "IFN", "IRF", "CD274", "PDCD1LG")) for gene in genes):
+        return 1.15
+    return 1.0
 
 
 def _kfold_oof_prior_predictions(

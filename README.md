@@ -220,7 +220,7 @@ python -m vkx.cli train-hard-generator \
 virtual cell = control cell + VKX baseline KO delta + bounded learned residual
 ```
 
-也就是说，generator 不能自由改变 KO 主方向，只能学习方向附近的细胞间波动。`--anchor-method` 可以选择 `vkx`、`pls`、`ridge`、`ensemble`、`calibrated` 或 `boosted`；如果正式 benchmark 显示 Ridge/PLS 更稳定，推荐先用 `ensemble` 作为 hard constraint 的锚点。如果出现“方向对但幅度偏小”的 interferon/JAK/STAT 强响应，可使用 `boosted`，它会在 constrained ensemble 基础上加入可解释的 response-strength prior。PyTorch 可用时会训练轻量 residual VAE；如果不可用，会退回 PCA residual sampler，并在报告里明确说明。
+也就是说，generator 不能自由改变 KO 主方向，只能学习方向附近的细胞间波动。`--anchor-method` 可以选择 `vkx`、`pls`、`ridge`、`ensemble`、`calibrated` 或 `boosted`；如果正式 benchmark 显示 Ridge/PLS 更稳定，推荐先用 `ensemble` 作为 hard constraint 的锚点。如果出现“方向对但强响应幅度偏小”，可使用 `boosted`。它会在 constrained ensemble 基础上加入可解释的 adaptive response-strength prior：根据 KO gene 和 feature family 自动增强 IFN/JAK/STAT、MAPK/TGFB、MYC/E2F/cell-cycle 或 checkpoint protein 等响应家族，并在 prediction table 中记录 `boosted_feature_count`、`max_boost_factor` 和 `boosted_families`。PyTorch 可用时会训练轻量 residual VAE；如果不可用，会退回 PCA residual sampler，并在报告里明确说明。
 
 ## 当前还缺什么？
 
