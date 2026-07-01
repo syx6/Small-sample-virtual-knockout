@@ -114,29 +114,25 @@ def _plot_method_leaderboard(metrics: pd.DataFrame, availability: pd.DataFrame, 
         - 0.25 * rows.get("mae", np.nan).fillna(1)
     )
     rows = rows.sort_values("_score", ascending=False)
-    available_methods = set(rows["method"].astype(str))
     missing = []
     if not availability.empty and "method" in availability.columns:
         for method in EXTERNAL_METHOD_ORDER:
             subset = availability.loc[availability["method"].astype(str).str.lower() == method.lower()]
-            if method not in available_methods and not subset.empty:
-                missing.append({"method": method, "roc_auc": np.nan, "direction_cosine": np.nan, "r2": np.nan, "mae": np.nan, "status": str(subset["status"].iloc[0])})
+            if not subset.empty:
+                missing.append({"method": method, "status": str(subset["status"].iloc[0])})
     rows["status"] = "scored"
-    if missing:
-        rows = pd.concat([rows, pd.DataFrame(missing)], ignore_index=True)
-    _draw_metric_table(
+    _draw_method_leaderboard(
         rows=rows,
+        missing=pd.DataFrame(missing),
         out_path=out / "01_method_leaderboard.png",
-        title="VKX formal benchmark against baselines and external-method slots",
-        subtitle="Scored rows use the same data and metrics. scGen/CPA/GEARS/CellOT remain not_run until external predictions are provided.",
-        label_col="method",
+        title="VKX formal benchmark against scored baselines",
+        subtitle="Only same-dataset predictions are scored; external deep models are tracked as benchmark slots.",
         metric_specs=[
             ("roc_auc", "AUC", 0.0, 1.0, False),
             ("direction_cosine", "Direction", 0.0, 1.0, False),
             ("r2", "R2", -0.5, 1.0, False),
             ("mae", "MAE", 0.0, max(0.01, float(pd.to_numeric(rows["mae"], errors="coerce").max(skipna=True) or 0.01)), True),
         ],
-        extra_col="status",
     )
 
 
@@ -198,18 +194,22 @@ def _plot_delta_heatmap(predictions: pd.DataFrame, truth: pd.DataFrame, out: Pat
     for feature in features:
         values = pd.to_numeric(merged.get(f"true_delta_{feature}"), errors="coerce")
         scores.append((feature, float(np.nanmean(np.abs(values)))))
-    chosen = [feature for feature, _ in sorted(scores, key=lambda x: x[1], reverse=True)[:12]]
+    chosen = [feature for feature, _ in sorted(scores, key=lambda x: x[1], reverse=True)[:8]]
+    keep_methods = ["ResponseBoosted", "ConstrainedEnsemble", "VKX"]
     rows: list[tuple[str, list[float]]] = []
     for _, row in truth.iterrows():
         rows.append((f"TRUE | {row['ko_target']}", [float(row.get(f"true_delta_{feature}", np.nan)) for feature in chosen]))
-    for _, row in merged.iterrows():
-        rows.append((f"{row['method']} | {row['ko_target']}", [float(row.get(f"pred_delta_{feature}", np.nan)) for feature in chosen]))
+    merged["_method_rank"] = merged["method"].map({name: i for i, name in enumerate(keep_methods)}).fillna(999)
+    for _, row in merged.loc[merged["method"].isin(keep_methods)].sort_values(["_method_rank", "ko_target"]).iterrows():
+        values = [float(row.get(f"pred_delta_{feature}", np.nan)) for feature in chosen]
+        if np.isfinite(values).any():
+            rows.append((f"{_method_short(row['method'])} | {row['ko_target']}", values))
     _draw_heatmap(
         rows,
         chosen,
         out / "03_real_vs_virtual_method_heatmap.png",
         "Real vs virtual KO delta heatmap",
-        "Rows show true KO and each method prediction on the strongest response features.",
+        "Limited to the strongest features and key scored methods; full values remain in the CSV tables.",
     )
 
 
@@ -219,12 +219,13 @@ def _plot_result_gallery(summary: pd.DataFrame, out: Path) -> None:
     rows = summary.copy()
     for col in ["mean_direction_cosine", "mean_abs_delta_error", "mean_distribution_improvement", "improved_fraction", "roc_auc"]:
         rows[col] = pd.to_numeric(rows[col], errors="coerce")
+    rows["display_label"] = rows.apply(_display_result_label, axis=1)
     _draw_metric_table(
         rows=rows,
         out_path=out / "04_single_double_multimodal_gallery.png",
         title="Single KO, double KO and multimodal/ATAC result gallery",
         subtitle="This panel asks whether VKX is useful beyond one RNA-only example.",
-        label_col="result_id",
+        label_col="display_label",
         metric_specs=[
             ("roc_auc", "AUC", 0.0, 1.0, False),
             ("mean_direction_cosine", "Direction", 0.0, 1.0, False),
@@ -350,6 +351,73 @@ def _write_report(
     (out / "paper_benchmark_report_zh.md").write_text("\n".join(text), encoding="utf-8")
 
 
+def _draw_method_leaderboard(
+    rows: pd.DataFrame,
+    missing: pd.DataFrame,
+    out_path: Path,
+    title: str,
+    subtitle: str,
+    metric_specs: list[tuple[str, str, float, float, bool]],
+) -> None:
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        return
+    rows = rows.head(8).copy()
+    row_h = 66
+    width = 1680
+    height = max(560, 150 + row_h * len(rows) + 80)
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    title_font = _pil_font(26)
+    font = _pil_font(16)
+    small = _pil_font(13)
+    draw.text((36, 24), title, fill=(18, 18, 18), font=title_font)
+    draw.text((36, 62), subtitle, fill=(85, 85, 85), font=font)
+    draw.text((36, 104), "Scored methods", fill=(25, 25, 25), font=font)
+    x_label = 36
+    metric_x = [420, 650, 880, 1110]
+    colors = _method_colors()
+    for i, (_, row) in enumerate(rows.iterrows()):
+        y = 142 + i * row_h
+        method = str(row.get("method", ""))
+        draw.rectangle((x_label, y + 8, x_label + 10, y + 38), fill=colors.get(method, (42, 157, 143)))
+        draw.text((x_label + 18, y + 8), _method_short(method), fill=(25, 25, 25), font=font)
+        for x0, spec in zip(metric_x, metric_specs):
+            col, name, vmin, vmax, lower_better = spec
+            if i == 0:
+                draw.text((x0, 104), name, fill=(30, 30, 30), font=small)
+            value = pd.to_numeric(pd.Series([row.get(col, np.nan)]), errors="coerce").iloc[0]
+            if not np.isfinite(value):
+                frac = 0.0
+                label = "NA"
+            else:
+                raw = min(max((float(value) - vmin) / (vmax - vmin + 1e-9), 0.0), 1.0)
+                frac = 1.0 - raw if lower_better else raw
+                label = f"{float(value):.3f}" if abs(float(value)) < 1 else f"{float(value):.2f}"
+            bar_color = (76, 120, 168) if lower_better else (42, 157, 143)
+            draw.rectangle((x0, y + 10, x0 + 158, y + 34), fill=(246, 246, 246), outline=(222, 222, 222))
+            draw.rectangle((x0, y + 10, x0 + int(158 * frac), y + 34), fill=bar_color)
+            draw.text((x0 + 170, y + 12), label, fill=(30, 30, 30), font=small)
+
+    box_x = 1360
+    box_y = 104
+    draw.rounded_rectangle((box_x, box_y, width - 38, height - 58), radius=8, fill=(248, 248, 248), outline=(222, 222, 222))
+    draw.text((box_x + 22, box_y + 22), "External methods", fill=(25, 25, 25), font=font)
+    draw.text((box_x + 22, box_y + 50), "Not scored until same-data\npredictions are imported.", fill=(90, 90, 90), font=small)
+    if missing.empty:
+        draw.text((box_x + 22, box_y + 100), "No external slots found.", fill=(90, 90, 90), font=small)
+    else:
+        for i, (_, row) in enumerate(missing.iterrows()):
+            y = box_y + 105 + i * 46
+            method = str(row.get("method", ""))
+            status = str(row.get("status", "not_run"))
+            draw.rectangle((box_x + 22, y + 6, box_x + 34, y + 26), fill=_method_colors().get(method, (120, 120, 120)))
+            draw.text((box_x + 44, y), method, fill=(25, 25, 25), font=font)
+            draw.text((box_x + 155, y + 2), status, fill=(120, 45, 45) if status == "not_run" else (45, 110, 75), font=small)
+    img.save(out_path)
+
+
 def _draw_metric_table(
     rows: pd.DataFrame,
     out_path: Path,
@@ -413,7 +481,7 @@ def _draw_heatmap(rows: list[tuple[str, list[float]]], features: list[str], out_
     if not rows or not features:
         return
     labels = [_feature_label(feature) for feature in features]
-    cell_w = 100
+    cell_w = 112
     cell_h = 30
     left = 340
     top = 130
@@ -431,7 +499,7 @@ def _draw_heatmap(rows: list[tuple[str, list[float]]], features: list[str], out_
     for j, label in enumerate(labels):
         parts = label.split("\n")
         for k, part in enumerate(parts[:2]):
-            draw.text((left + j * cell_w, 88 + k * 14), _short(part, 13), fill=(30, 30, 30), font=small)
+            draw.text((left + j * cell_w, 88 + k * 14), _short(part, 16), fill=(30, 30, 30), font=small)
     for i, (label, values) in enumerate(rows):
         y = top + i * cell_h
         draw.text((35, y + 6), _short(label, 38), fill=(30, 30, 30), font=font)
@@ -472,11 +540,56 @@ def _method_colors() -> dict[str, tuple[int, int, int]]:
     }
 
 
+def _method_short(method: object) -> str:
+    return {
+        "ResponseBoosted": "VKX-Boosted",
+        "ConstrainedEnsemble": "Ensemble",
+        "CalibratedEnsemble": "Calibrated",
+    }.get(str(method), str(method))
+
+
+def _display_result_label(row: pd.Series) -> str:
+    text = str(row.get("result_id", ""))
+    dataset = str(row.get("dataset", ""))
+    task = str(row.get("task_type", ""))
+    if "papalexi" in dataset.lower() or "single_gene" in text:
+        return "Papalexi single KO\nRNA+ADT"
+    if "hmpcite" in text.lower() or "hmpcite" in dataset.lower():
+        return "HMPCITE double KO\nRNA+ADT"
+    if "double_gene" in text:
+        return "Norman double KO\nRNA programs"
+    if "atac" in text.lower() or "ATAC" in task:
+        return "scPerturb ATAC\npeak-level"
+    return text.replace("_", " ")
+
+
 def _feature_label(feature: object) -> str:
     text = str(feature)
     for prefix in ["pathway_", "program_", "protein_", "atac_", "tf_", "peak_"]:
         if text.startswith(prefix):
             text = text[len(prefix) :]
+    lower = text.lower()
+    replacements = [
+        ("interferon_gamma_response", "IFN gamma\nresponse"),
+        ("interferon_gamma_signaling", "IFN gamma\nsignaling"),
+        ("interferon_alpha_beta_signaling", "IFN alpha/beta\nsignaling"),
+        ("interferon_alpha_response", "IFN alpha\nresponse"),
+        ("interferon_signaling", "IFN\nsignaling"),
+        ("innate_immune_system", "Innate\nimmune"),
+        ("adaptive_immune_system", "Adaptive\nimmune"),
+        ("cytokine_signaling_in_immune_system", "Cytokine\nimmune"),
+        ("immune_system", "Immune\nsystem"),
+        ("il_6_jak_stat3_signaling", "IL6 JAK\nSTAT3"),
+        ("il_2_stat5_signaling", "IL2\nSTAT5"),
+        ("myc_targets_v1", "MYC\ntargets"),
+        ("myc_encode", "MYC\nENCODE"),
+        ("myc_chea", "MYC\nChEA"),
+        ("mapk_family_signaling_cascades", "MAPK family\ncascades"),
+        ("mapk1_mapk3_signaling", "MAPK1/3\nsignaling"),
+    ]
+    for key, label in replacements:
+        if lower == key:
+            return label
     text = text.replace("_Signaling", "").replace("_Response", "").replace("_System", "")
     text = text.replace("_ENCODE", "").replace("_CHEA", "")
     parts = [part for part in text.split("_") if part]
