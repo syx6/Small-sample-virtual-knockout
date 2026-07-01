@@ -1,339 +1,178 @@
-# 小样本多模态虚拟敲除
+# Small-sample Multimodal Virtual Knockout (VKX)
 
-这是一个面向小样本 perturbation / CRISPR 单细胞数据的虚拟敲除原型。
+VKX 是一个面向小样本单细胞 perturbation 数据的虚拟敲除方法和软件原型。它的目标不是用大模型自由生成一个看起来像 KO 的细胞，而是在可解释的 pathway/program/protein/ATAC 状态空间中，利用真实 KO 数据、系统网络先验和多模态信息，预测一个基因或两个基因敲除后细胞状态会怎样改变。
 
-关键设计原则：
+## 一句话概括
 
-- 用户输入普通单细胞或多组学矩阵，不需要手工准备通路分数。
-- 软件内部自动把 RNA 转成 pathway/program score。
-- protein/ADT/ATAC/gene activity 可以作为额外模态加入。
-- 模型用系统先验和 residual/PLS 约束 KO 方向，避免小样本下自由生成模型跑偏。
-- 输出清晰可读的 heatmap、UMAP 和 AUC/ROC 曲线。
+用户输入普通单细胞矩阵或多组学矩阵，软件内部自动转成可解释的状态表示，然后输出虚拟 KO 之后的 pathway/protein/ATAC 变化、单细胞状态移动图、真实 vs 虚拟 heatmap、ROC/AUC 曲线、KO 总结卡片、失败原因诊断和图文报告。
 
-## 推荐输入
+## 为什么这个方法适合小样本？
 
-普通用户推荐直接输入 `.h5ad`：
+VKX 采用 hard-constrained residual/PLS baseline：
 
-```text
-adata.X              cells x genes RNA matrix
-adata.var_names      gene symbols
-adata.obs[ko_col]    每个细胞的 KO / perturbation 标签
-adata.obsm[...]      可选 protein/ADT/ATAC/gene activity 矩阵
-```
+- KO 平均方向由真实 perturbation 数据和 Reactome/MSigDB/TF-target/PPI/motif/peak-gene 等先验约束。
+- 多模态信息作为额外状态特征加入，例如 RNA pathway score、ADT protein、ATAC gene activity、chromVAR motif activity、peak-level accessibility。
+- 双基因 KO 优先使用 interaction residual；数据不足时回退到稳定的 additive/prior-constrained baseline。
+- 轻量生成模块只学习 hard constraint 附近的不确定性范围，不让 VAE/flow/diffusion 自由改变 KO 主方向。
 
-也支持 CSV 原始表达矩阵：
+这意味着它更保守、更容易解释，也更适合小样本；代价是复杂分布形状和强非线性效应不一定能完全模拟。
 
-```text
-ko_target,STAT1,JAK2,IRF1,...
-control,0.1,1.3,0.4,...
-STAT1,0.0,1.2,0.2,...
-```
+## 支持什么输入？
 
-`pathway/program score` 是软件内部自动生成的模型状态表示，不是用户必须提供的输入。
+### 1. 带 KO 标签的 perturbation / CRISPR / Perturb-seq 数据
 
-## 直接导入 Seurat / 10x
-
-如果用户手里是 10x 文件夹、10x h5 或 h5Seurat，可以先导入成 workflow-ready h5ad：
-
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli import-data `
-  --input path\to\filtered_feature_bc_matrix `
-  --format 10x_mtx `
-  --out-dir results\import_10x_demo
-```
-
-支持：
+推荐 h5ad：
 
 ```text
---format h5ad
---format 10x_mtx
---format 10x_h5
---format h5seurat
+adata.X                 cells x genes RNA matrix
+adata.var_names         gene symbols
+adata.obs["ko_target"]  control / STAT1 / STAT1+JAK2 等 KO 标签
+adata.obs["cell_type"]  可选
+adata.obs["batch"]      可选
+adata.obsm["protein"]   可选，ADT/CITE-seq protein
+adata.obsm["atac"]      可选，ATAC gene activity
+adata.obsm["chromvar"]  可选，TF/motif activity
+adata.obsm["peak"]      可选，raw peak count / peak accessibility
 ```
 
-导入后固定输出：
+有真实 KO 标签时，可以做准确性评估，输出 AUC、R2/MAE、真实 vs 虚拟 heatmap 和 UMAP/PCA 状态移动图。
 
-- `imported_data.h5ad`
-- `input_summary.csv`
-- `input_overview.png`
-- `import_report.md`
+### 2. 普通 10X 单细胞数据
 
-`input_overview.png` 会直观显示导入了多少细胞、多少 RNA features、有没有 protein/peak/guide 等额外模态，以及 metadata 标签分布。
+没有 KO 标签也支持，但只能做 prediction-only reference application：
 
-## 一键运行 h5ad 示例
+- 可以预测“如果敲 STAT1 或 STAT1+JAK2，细胞状态可能往哪里移动”。
+- 不能在该数据内部报告真实准确率、AUC、R2 或 MAE。
+- 软件会输出 prior coverage、transfer confidence、uncertainty band、虚拟状态图和 KO 总结卡片。
 
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli run `
-  --input-h5ad data\papalexi_small_pathway.h5ad `
-  --ko-col ko_target `
-  --target-kos STAT1 `
-  --prior-dir data\priors `
-  --out-dir results\software_interface_raw_papalexi `
-  --dataset-name "Papalexi ECCITE-seq" `
-  --modality "raw RNA matrix + ADT protein obsm" `
-  --representation "auto-derived pathway/protein scores" `
-  --protein-obsm protein `
-  --calibrate none `
-  --max-pathways 24
+### 3. 多模态数据
+
+支持 RNA-only、RNA+ADT、RNA+ATAC、RNA+ADT+ATAC 输入。当前公开 labelled benchmark 中已经比较明确的是：
+
+- RNA+ADT+perturbation：例如 ECCITE/Perturb-CITE 类数据。
+- RNA+ATAC+perturbation：例如 multiome perturbation 类数据。
+- RNA+ADT+ATAC 但无 genetic perturbation 标签：例如 DOGMA/TEA-seq，更适合 prediction-only/reference application。
+
+真正公开、同一批细胞同时具备 RNA+ADT+ATAC+genetic perturbation 标签的数据集，目前在本项目 registry 中仍标记为 `not_confirmed_public`，不能假装已经完成 full trimodal labelled benchmark。
+
+## 最常用命令
+
+### 导入 10X 或 Seurat/AnnData 数据
+
+```bash
+python -m vkx.cli import-data \
+  --input path/to/filtered_feature_bc_matrix \
+  --format 10x_mtx \
+  --metadata-csv metadata.csv \
+  --cell-id-col cell_id \
+  --out-dir results/import_10x
 ```
 
-## 输出
+### 有 KO 标签时直接评估虚拟敲除
 
-运行后会生成：
-
-- `derived_state_scores.csv`: 软件自动派生出的 pathway/protein/ATAC 状态表
-- `derived_state_manifest.csv`: 每个状态特征来自哪里
-- `summary.csv`: 总体效果
-- `metrics.csv`: 每个 KO、每个 feature 的分布距离
-- `delta_table.csv`: 真实 KO 变化 vs 虚拟 KO 变化
-- `virtual_cells.csv`: 虚拟 KO 单细胞状态
-- `auc_summary.csv`: 强响应识别 AUC
-- `report.md`: 自动报告
-
-默认主图：
-
-- `01_summary_dashboard.png`
-- `02_true_vs_virtual_heatmap.png`
-- `03_cell_state_umap.png`
-- `04_auc_strong_response_roc.png`
-
-## 当前 h5ad 示例结果
-
-输出目录：
-
-```text
-results/software_interface_raw_papalexi
+```bash
+python -m vkx.cli run \
+  --input-h5ad results/import_10x/imported_data.h5ad \
+  --ko-col ko_target \
+  --target-kos STAT1,STAT1+JAK2 \
+  --prior-dir data/priors \
+  --extra-obsm protein:protein,chromvar:tf,peak:peak \
+  --extra-feature-selection atac_peak \
+  --extra-feature-metadata-csv peak_annotation.csv \
+  --shape-calibrate quantile \
+  --out-dir results/labelled_virtual_ko
 ```
 
-结果：
+### 训练 reference model
 
-这个命令默认展示“虚拟敲除一个基因”的使用方式。评估多个 KO 时才需要写成逗号分隔，例如 `STAT1,JAK2`。
-
-## 模型学过多少 KO？没学过的基因怎么预测？
-
-当前原型接入过多个真实 perturbation 数据集，包括 Papalexi、Norman、HMPCITE、Liscovitch ATAC、Datlinger 和 Dixit。合并看，本地实验覆盖了百级别扰动基因，大约 129 个基因名。
-
-但这个数字不等于“某一个模型已经一次性学过 129 个基因”。每次训练通常发生在一个具体 reference 数据集里，例如用 Papalexi 的部分单基因 KO 学方向，再预测留出的 KO；或用 Norman 的单基因 KO 预测双基因组合。
-
-对于训练中没见过的基因，模型不会使用 one-hot 记忆，而是构建系统先验表示：
-
-```text
-target gene
--> Reactome/MSigDB pathway
--> TF-target network
--> PPI neighborhood
--> motif / chromVAR / ATAC prior
--> KO prior vector
--> predicted KO delta
+```bash
+python -m vkx.cli train-reference \
+  --input-h5ad perturbation_reference.h5ad \
+  --ko-col ko_target \
+  --batch-col donor \
+  --interaction-mode auto \
+  --prior-dir data/priors \
+  --extra-obsm protein:protein,chromvar:tf,peak:peak \
+  --extra-feature-selection atac_peak \
+  --extra-feature-metadata-csv peak_annotation.csv \
+  --output-model results/reference_models/vkx_reference.pkl
 ```
 
-因此 unseen gene prediction 本质上是基于生物网络先验的 zero-shot / few-shot 外推。它适合做候选筛选和方向判断；如果目标基因缺少 pathway、TF-target、PPI 或 motif 先验覆盖，软件应该把结果标记为低置信度。
+### 应用到普通 10X 或无 KO 标签数据
 
-## 普通 10X 单细胞数据
-
-如果用户手里只是普通 10X scRNA-seq，没有 KO/perturbation 标签，可以先运行：
-
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli score `
-  --input-h5ad your_10x_data.h5ad `
-  --prior-dir data\priors `
-  --out-dir results\your_10x_state_scores
+```bash
+python -m vkx.cli apply-reference \
+  --reference-model results/reference_models/vkx_reference.pkl \
+  --input-h5ad ordinary_10x_or_multiome.h5ad \
+  --target-kos STAT1,STAT1+JAK2 \
+  --cell-type-col cell_type \
+  --batch-col donor \
+  --uncertainty-method hard-residual \
+  --out-dir results/prediction_only_STAT1
 ```
 
-这一步会自动生成：
+### 结果诊断：告诉用户哪里可信、哪里要谨慎
 
-- `derived_state_scores.csv`
-- `derived_state_manifest.csv`
-
-注意：没有真实 KO 标签时，软件可以准备细胞状态并用于后续虚拟 KO 应用，但不能计算真实 KO 对照、AUC、UMAP 改善等评估指标。要评估“好不好”，必须有 perturb-seq / CRISPR / 药物扰动等真实 perturbation 标签。
-
-## 有 KO 标签的 10X 数据长什么样？
-
-支持。有 KO 标签的 10X 数据通常由两部分组成：
-
-```text
-filtered_feature_bc_matrix/
-├── matrix.mtx.gz
-├── features.tsv.gz
-└── barcodes.tsv.gz
-
-metadata.csv
+```bash
+python -m vkx.cli diagnose-results \
+  --delta-csv results/labelled_virtual_ko/delta_table.csv \
+  --manifest-csv results/labelled_virtual_ko/derived_state_manifest.csv \
+  --out-dir results/labelled_virtual_ko/diagnosis
 ```
 
-`metadata.csv` 至少需要两列：
+`run`、`fit` 和 `apply-reference` 会自动尝试生成诊断结果；这个命令适合对已有结果重新诊断。
 
-```csv
-cell_id,ko_target
-AAACCCAAGAAACACT-1,control
-AAACCCAAGAAACCAT-1,STAT1
-AAACCCAAGAAAGTGG-1,JAK2
-AAACCCAAGAAATCCA-1,STAT1+JAK2
+### 一键整理成用户可读报告
+
+```bash
+python -m vkx.cli summarize-result \
+  --result-dir results/labelled_virtual_ko
 ```
 
-也可以包含 cell type 和 batch：
+这个命令会把一个结果目录自动整理成：
 
-```csv
-cell_id,ko_target,cell_type,batch
-AAACCCAAGAAACACT-1,control,T_cell,batch1
-AAACCCAAGAAACCAT-1,STAT1,T_cell,batch1
-AAACCCAAGAAAGTGG-1,JAK2,Mono,batch2
-AAACCCAAGAAATCCA-1,STAT1+JAK2,Mono,batch2
+- `readable_result_report/user_readable_result_report.md`
+- `readable_result_report/ko_cards/`
+- `readable_result_report/diagnosis/`
+- `readable_result_report/figure_package/`
+
+适合把结果发给别人看，也适合写论文或组会汇报前快速检查结果是否可信。
+
+## 主要输出怎么看？
+
+每个结果目录通常包含：
+
+- `01_summary_dashboard.png`: 总体表现，包括方向一致性、误差和改进比例。
+- `02_true_vs_virtual_heatmap.png`: 最重要的图，直接比较真实 KO delta、虚拟 KO delta 和误差。
+- `03_cell_state_umap.png`: 单细胞状态空间中 control、virtual KO、true KO 的位置。
+- `04_auc_strong_response_roc.png`: AUC 曲线，不是柱状图，用来判断能否识别强响应特征。
+- `ko_cards/ko_card_<KO>.png`: 每个 KO 的用户可读总结卡片。
+- `diagnosis/01_failure_diagnosis_overview.png`: 哪些 KO/特征风险高。
+- `diagnosis/02_feature_error_heatmap.png`: feature-level 误差热图。
+- `figure_package/figure_package_report.md`: 自动整理好的图文报告。
+- `readable_result_report/user_readable_result_report.md`: 一键汇总后的用户可读总报告。
+
+## 怎么做横向比较？
+
+```bash
+python -m vkx.cli method-comparison \
+  --metric-csv results/vkx_metrics.csv,results/ridge_metrics.csv,results/gears_metrics.csv \
+  --out-dir results/method_comparison
 ```
 
-先导入：
+VKX 的定位是小样本、多模态、先验约束、可解释 baseline。它应该和 ridge/PLS、scGen、CPA、GEARS、CellOT、diffusion/flow 类方法比较，但结论需要限定在具体 benchmark 和数据规模内。
 
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli import-data `
-  --input path\to\filtered_feature_bc_matrix `
-  --format 10x_mtx `
-  --metadata-csv metadata.csv `
-  --cell-id-col cell_id `
-  --out-dir results\import_10x_ko
-```
+## 当前还缺什么？
 
-再做真实 KO 评估：
+1. 需要更正式的横向 benchmark，把 VKX 与 ridge/PLS、scGen、CPA、GEARS、CellOT 等方法在同一批数据上比较。
+2. 真正公开 RNA+ADT+ATAC+genetic perturbation labelled benchmark 仍未确认；找到后才能升级为 full trimodal labelled benchmark。
+3. 当前 VAE/flow/diffusion 入口仍以 hard-constrained residual uncertainty 为主，完整神经生成模型需要更多同类型 perturbation 数据后再训练。
+4. MAPK/TGFB 等强非线性 program 仍是困难案例，需要更强 pathway/TF/PPI/motif 先验和非线性修正。
+5. 可视化已经能自动生成，但论文级多 panel figure 还需要针对最终 benchmark 再统一排版。
 
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli run `
-  --input-h5ad results\import_10x_ko\imported_data.h5ad `
-  --ko-col ko_target `
-  --target-kos STAT1,JAK2,STAT1+JAK2 `
-  --prior-dir data\priors `
-  --out-dir results\tenx_ko_virtual_eval
-```
+## 结果解释原则
 
-只要 `ko_target` 里同时有 `control` 和真实 KO 标签，就可以输出真实 vs 虚拟 heatmap、UMAP、ROC/AUC 和 summary dashboard。
-
-## Reference model 应用到普通 10X
-
-从 perturbation 数据训练 reference KO 模型：
-
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli train-reference `
-  --input-h5ad data\papalexi_small_pathway.h5ad `
-  --ko-col ko_target `
-  --prior-dir data\priors `
-  --output-model results\reference_models\papalexi_rna_protein_reference.pkl `
-  --dataset-name "Papalexi ECCITE-seq reference" `
-  --protein-obsm protein `
-  --max-pathways 24
-```
-
-把 reference model 应用到普通 h5ad 细胞：
-
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli inspect-reference `
-  --reference-model results\reference_models\papalexi_rna_protein_reference.pkl `
-  --target-kos STAT1,JAK2,STAT1+JAK2 `
-  --out-dir results\reference_inspection_demo
-```
-
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli apply-reference `
-  --reference-model results\reference_models\papalexi_rna_protein_reference.pkl `
-  --input-h5ad your_10x_data.h5ad `
-  --target-kos STAT1 `
-  --out-dir results\your_10x_virtual_STAT1
-```
-
-示例输出：
-
-```text
-results/reference_apply_stat1_demo
-```
-
-注意：这是 prediction-only 模式。如果输入普通 10X 没有真实 KO 标签，不会报告真实准确率、AUC 或 distribution improvement。
-
-## 当前 h5ad 多 KO 评估示例
-
-如果要复现实验评估，可以一次评估多个真实 KO：
-
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli run `
-  --input-h5ad data\papalexi_small_pathway.h5ad `
-  --ko-col ko_target `
-  --target-kos STAT1,JAK2,IFNGR2,IRF1 `
-  --prior-dir data\priors `
-  --out-dir results\software_interface_raw_papalexi `
-  --dataset-name "Papalexi ECCITE-seq" `
-  --modality "raw RNA matrix + ADT protein obsm" `
-  --representation "auto-derived pathway/protein scores" `
-  --protein-obsm protein `
-  --calibrate none `
-  --max-pathways 24
-```
-
-示例结果：
-
-- mean distribution improvement: `0.111`
-- improved fraction: `0.759`
-- mean direction cosine: `0.679`
-- strong-response ROC-AUC: `0.802`
-
-## 检查多模态 perturbation benchmark 是否合格
-
-拿到 RNA+ADT、RNA+ATAC 或 RNA+ADT+ATAC 且带 perturbation 标签的 h5ad 后，可以先检查它是否适合做真实 benchmark：
-
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli validate-benchmark `
-  --input-h5ad your_multimodal_perturbation.h5ad `
-  --ko-col ko_target `
-  --extra-obsm protein:protein,atac:atac,chromvar:tf,peak:peak `
-  --out-dir results\benchmark_readiness
-```
-
-固定输出：
-
-- `benchmark_readiness.csv`
-- `benchmark_label_counts.csv`
-- `benchmark_overview.png`
-- `benchmark_modalities.png`
-- `benchmark_readiness_report.md`
-
-这一步会告诉用户：有没有 KO 标签、有没有 control、每个 KO 有多少细胞、检测到哪些模态，以及这个数据能不能作为真实准确性 benchmark。
-
-如果 RNA 和 ATAC 是分开的矩阵，可以先组装：
-
-```powershell
-.\.venv\Scripts\python.exe -m vkx.cli assemble-multiome `
-  --rna-input path\to\rna_matrix `
-  --rna-format 10x_mtx `
-  --atac-input path\to\atac_matrix `
-  --atac-format 10x_mtx `
-  --metadata-csv metadata_with_ko.csv `
-  --cell-id-col cell_id `
-  --ko-col ko_target `
-  --max-atac-features 500 `
-  --output-h5ad data\public_multiome_perturbation.h5ad `
-  --out-dir results\public_multiome_assembly
-```
-
-固定输出：
-
-- `multiome_assembly_overview.png`
-- `multiome_assembly_report.md`
-- `multiome_assembly_summary.csv`
-
-## 文档
-
-- `docs/comprehensive_report_github.md`: 推荐阅读的完整中文报告，公式和图片均为 GitHub 可直接显示版本
-- `docs/software_interface.md`: 用户输入、运行方式和输出解释
-- `docs/reference_model_workflow_v2.md`: reference model v2、批量 KO、cell type 分层、prediction-only 10X/multiome 报告
-- `docs/ordered_enhancement_plan.md`: 按顺序增强 Seurat/10x、多模态 benchmark、ATAC peak、多基因 KO 和 batch covariate
-- `docs/atac_peak_regulatory_prior_v2.md`: ATAC peak-level 调控先验 v2 和 KDM6A 结果
-- `docs/single_double_knockout_results.md`: 单基因敲除和双基因敲除结果整理
-- `docs/current_scope_and_limitations.md`: 当前支持范围和限制说明
-- `docs/virtual_knockout_method_background.md`: 虚拟敲除背景、主流方法和当前方法选择
-- `docs/norman_double_interaction_model.md`: 双敲 interaction residual 优化结果
-- `docs/two_day_experiment_summary.md`: 两天实验和调试总结
-- `docs/pathway_magnitude_calibration.md`: RNA-only 幅度校准结果
-- `docs/multi_dataset_virtual_ko_demo.md`: 多数据集虚拟 KO 示例
-
-## 开发结构
-
-- `vkx/preprocess.py`: 原始矩阵到 pathway/program/protein 状态表
-- `vkx/core.py`: prior-constrained virtual KO 模型
-- `vkx/visualization.py`: heatmap、UMAP、AUC、summary dashboard
-- `vkx/cli.py`: 命令行入口
-
-下一步重点是在这个接口上扩展和评估多基因 KO。
+- 有 KO 标签：可以报告真实准确性，例如 AUC、MAE、R2、方向一致性、真实 vs 虚拟 heatmap。
+- 没有 KO 标签：只能报告预测状态变化、先验覆盖、迁移置信度和不确定性范围，不能报告真实准确性。
+- 多模态输入通常会让预测更可靠，但前提是模态质量好、与 KO 机制相关，并且有合理的 feature selection 和先验约束。
+- AUC 如果接近 1，需要检查特征数、阈值和正负样本数量；特征很少时 AUC 容易显得过于理想，必须谨慎解释。

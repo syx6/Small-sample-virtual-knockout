@@ -3,22 +3,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import pandas as pd
-
-from .benchmark import public_benchmark_registry, validate_multimodal_benchmark
-from .cards import make_ko_summary_cards
-from .comparison import make_method_comparison
-from .core import run_virtual_ko
-from .figure_pack import make_figure_package
-from .importers import import_single_cell_data, write_import_outputs
-from .interaction import run_double_interaction
-from .multiome import assemble_multiome_benchmark
-from .peak_annotation import annotate_peaks, build_peak_annotation_pipeline, make_gene_tss_from_gtf, standardize_peak_score_table
-from .preprocess import csv_matrix_to_state_table, h5ad_to_state_scores, h5ad_to_state_table, parse_extra_obsm_specs
-from .reference import apply_reference_model, inspect_reference_model, train_reference_model
-from .visualization import make_all_plots
-from .workflow import write_workflow_template
-
 
 def parse_features(value: str | None) -> list[str] | None:
     if not value:
@@ -38,6 +22,8 @@ def target_labels(args: argparse.Namespace) -> list[str]:
 
 
 def _auto_make_cards(out_dir: Path, delta_name: str, auc_name: str | None = None, confidence_name: str | None = None) -> None:
+    from .cards import make_ko_summary_cards
+
     delta_csv = out_dir / delta_name
     if not delta_csv.exists():
         return
@@ -54,7 +40,45 @@ def _auto_make_cards(out_dir: Path, delta_name: str, auc_name: str | None = None
         print(f"  note: KO summary cards were skipped: {exc}")
 
 
+def _auto_diagnose(
+    out_dir: Path,
+    delta_name: str,
+    manifest_name: str | None = None,
+    confidence_name: str | None = None,
+) -> None:
+    from .diagnostics import diagnose_virtual_ko_results
+
+    delta_csv = out_dir / delta_name
+    if not delta_csv.exists():
+        return
+    manifest_csv = out_dir / manifest_name if manifest_name and (out_dir / manifest_name).exists() else None
+    confidence_csv = out_dir / confidence_name if confidence_name and (out_dir / confidence_name).exists() else None
+    try:
+        diagnose_virtual_ko_results(
+            delta_csv=delta_csv,
+            manifest_csv=manifest_csv,
+            confidence_csv=confidence_csv,
+            out_dir=out_dir / "diagnosis",
+        )
+    except Exception as exc:
+        print(f"  note: failure diagnosis was skipped: {exc}")
+
+
+def _auto_summarize(out_dir: Path) -> None:
+    from .result_report import summarize_result_directory
+
+    try:
+        summarize_result_directory(out_dir, out_dir / "readable_result_report")
+    except Exception as exc:
+        print(f"  note: readable result report was skipped: {exc}")
+
+
 def run_fit(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from .core import run_virtual_ko
+    from .visualization import make_all_plots
+
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     frame = pd.read_csv(args.state_csv)
@@ -80,6 +104,8 @@ def run_fit(args: argparse.Namespace) -> None:
     result.calibration.to_csv(out_dir / "calibration.csv", index=False)
     auc_summary = make_all_plots(result.summary, result.delta_table, result.virtual_cells, result.auc_points, out_dir)
     _auto_make_cards(out_dir, "delta_table.csv", auc_name="auc_summary.csv")
+    _auto_diagnose(out_dir, "delta_table.csv")
+    _auto_summarize(out_dir)
     print("Saved reusable virtual KO outputs:")
     print(f"  report: {out_dir / 'report.md'}")
     print(f"  summary: {out_dir / 'summary.csv'}")
@@ -89,6 +115,8 @@ def run_fit(args: argparse.Namespace) -> None:
 
 
 def run_import_data(args: argparse.Namespace) -> None:
+    from .importers import import_single_cell_data, write_import_outputs
+
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_h5ad = Path(args.output_h5ad) if args.output_h5ad else out_dir / "imported_data.h5ad"
@@ -109,6 +137,8 @@ def run_import_data(args: argparse.Namespace) -> None:
 
 
 def run_validate_benchmark(args: argparse.Namespace) -> None:
+    from .benchmark import validate_multimodal_benchmark
+
     result = validate_multimodal_benchmark(
         input_h5ad=args.input_h5ad,
         ko_col=args.ko_col,
@@ -125,6 +155,8 @@ def run_validate_benchmark(args: argparse.Namespace) -> None:
 
 
 def run_benchmark_registry(args: argparse.Namespace) -> None:
+    from .benchmark import public_benchmark_registry
+
     table = public_benchmark_registry(args.out_dir)
     print("Saved public benchmark registry:")
     print(f"  registry: {args.out_dir}\\public_benchmark_registry.csv")
@@ -133,12 +165,16 @@ def run_benchmark_registry(args: argparse.Namespace) -> None:
 
 
 def run_workflow_template(args: argparse.Namespace) -> None:
+    from .workflow import write_workflow_template
+
     path = write_workflow_template(args.mode, args.out_dir)
     print("Saved workflow template:")
     print(f"  template: {path}")
 
 
 def run_method_comparison(args: argparse.Namespace) -> None:
+    from .comparison import make_method_comparison
+
     metrics = [item.strip() for item in (args.metric_csv or "").split(",") if item.strip()]
     result = make_method_comparison(metrics, args.out_dir)
     print("Saved method comparison outputs:")
@@ -151,6 +187,8 @@ def run_method_comparison(args: argparse.Namespace) -> None:
 
 
 def run_ko_cards(args: argparse.Namespace) -> None:
+    from .cards import make_ko_summary_cards
+
     index = make_ko_summary_cards(
         delta_csv=args.delta_csv,
         out_dir=args.out_dir,
@@ -165,6 +203,8 @@ def run_ko_cards(args: argparse.Namespace) -> None:
 
 
 def run_figure_package(args: argparse.Namespace) -> None:
+    from .figure_pack import make_figure_package
+
     index = make_figure_package(args.result_dir, args.out_dir)
     out = Path(args.out_dir) if args.out_dir else Path(args.result_dir) / "figure_package"
     print("Saved figure package:")
@@ -173,7 +213,42 @@ def run_figure_package(args: argparse.Namespace) -> None:
     print(f"  figures: {len(index)}")
 
 
+def run_diagnose_results(args: argparse.Namespace) -> None:
+    from .diagnostics import diagnose_virtual_ko_results
+
+    result = diagnose_virtual_ko_results(
+        delta_csv=args.delta_csv,
+        manifest_csv=args.manifest_csv,
+        confidence_csv=args.confidence_csv,
+        out_dir=args.out_dir,
+        min_true_delta=args.min_true_delta,
+        large_error=args.large_error,
+        max_features_per_ko=args.max_features_per_ko,
+    )
+    print("Saved virtual KO diagnosis outputs:")
+    print(f"  KO diagnosis: {args.out_dir}\\ko_failure_diagnosis.csv")
+    print(f"  feature diagnosis: {args.out_dir}\\feature_failure_diagnosis.csv")
+    print(f"  report: {args.out_dir}\\failure_diagnosis_report.md")
+    print(f"  KO rows: {len(result['ko'])}")
+    print(f"  feature rows: {len(result['feature'])}")
+
+
+def run_summarize_result(args: argparse.Namespace) -> None:
+    from .result_report import summarize_result_directory
+
+    result = summarize_result_directory(args.result_dir, args.out_dir)
+    out = Path(args.out_dir) if args.out_dir else Path(args.result_dir) / "readable_result_report"
+    print("Saved user-readable result report:")
+    print(f"  report: {result['report']}")
+    print(f"  figure package: {out}\\figure_package\\figure_package_report.md")
+    print(f"  KO cards: {len(result['ko_cards'])}")
+    print(f"  KO diagnosis rows: {len(result['diagnosis_ko'])}")
+    print(f"  feature diagnosis rows: {len(result['diagnosis_feature'])}")
+
+
 def run_assemble_multiome(args: argparse.Namespace) -> None:
+    from .multiome import assemble_multiome_benchmark
+
     adata = assemble_multiome_benchmark(
         rna_input=args.rna_input,
         rna_format=args.rna_format,
@@ -196,6 +271,8 @@ def run_assemble_multiome(args: argparse.Namespace) -> None:
 
 
 def run_annotate_peaks(args: argparse.Namespace) -> None:
+    from .peak_annotation import annotate_peaks
+
     table = annotate_peaks(
         input_h5ad=args.input_h5ad,
         obsm_key=args.obsm_key,
@@ -215,6 +292,8 @@ def run_annotate_peaks(args: argparse.Namespace) -> None:
 
 
 def run_make_gene_tss(args: argparse.Namespace) -> None:
+    from .peak_annotation import make_gene_tss_from_gtf
+
     table = make_gene_tss_from_gtf(
         gtf=args.gtf,
         out_csv=args.out_csv,
@@ -229,6 +308,8 @@ def run_make_gene_tss(args: argparse.Namespace) -> None:
 
 
 def run_standardize_peak_scores(args: argparse.Namespace) -> None:
+    from .peak_annotation import standardize_peak_score_table
+
     table = standardize_peak_score_table(
         input_csv=args.input_csv,
         out_csv=args.out_csv,
@@ -243,6 +324,8 @@ def run_standardize_peak_scores(args: argparse.Namespace) -> None:
 
 
 def run_build_peak_annotation(args: argparse.Namespace) -> None:
+    from .peak_annotation import build_peak_annotation_pipeline
+
     table = build_peak_annotation_pipeline(
         out_csv=args.out_csv,
         input_h5ad=args.input_h5ad,
@@ -265,6 +348,10 @@ def run_build_peak_annotation(args: argparse.Namespace) -> None:
 
 
 def run_from_raw(args: argparse.Namespace) -> None:
+    from .core import run_virtual_ko
+    from .preprocess import csv_matrix_to_state_table, h5ad_to_state_table, parse_extra_obsm_specs
+    from .visualization import make_all_plots
+
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     if args.input_h5ad:
@@ -315,6 +402,8 @@ def run_from_raw(args: argparse.Namespace) -> None:
     result.calibration.to_csv(out_dir / "calibration.csv", index=False)
     auc_summary = make_all_plots(result.summary, result.delta_table, result.virtual_cells, result.auc_points, out_dir)
     _auto_make_cards(out_dir, "delta_table.csv", auc_name="auc_summary.csv")
+    _auto_diagnose(out_dir, "delta_table.csv", manifest_name="derived_state_manifest.csv")
+    _auto_summarize(out_dir)
     print("Saved raw-matrix virtual KO outputs:")
     print(f"  derived state scores: {state_csv}")
     print(f"  report: {out_dir / 'report.md'}")
@@ -325,6 +414,8 @@ def run_from_raw(args: argparse.Namespace) -> None:
 
 
 def run_score(args: argparse.Namespace) -> None:
+    from .preprocess import h5ad_to_state_scores, parse_extra_obsm_specs
+
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     frame, manifest = h5ad_to_state_scores(
@@ -348,6 +439,9 @@ def run_score(args: argparse.Namespace) -> None:
 
 
 def run_train_reference(args: argparse.Namespace) -> None:
+    from .preprocess import parse_extra_obsm_specs
+    from .reference import train_reference_model
+
     reference = train_reference_model(
         input_h5ad=args.input_h5ad,
         state_csv=args.state_csv,
@@ -375,6 +469,8 @@ def run_train_reference(args: argparse.Namespace) -> None:
 
 
 def run_apply_reference(args: argparse.Namespace) -> None:
+    from .reference import apply_reference_model
+
     cells, deltas = apply_reference_model(
         reference_model=args.reference_model,
         input_h5ad=args.input_h5ad,
@@ -399,9 +495,13 @@ def run_apply_reference(args: argparse.Namespace) -> None:
     print(f"  n target KO: {len(deltas)}")
     write_analysis_mode(Path(args.out_dir), "prediction_only", "A saved perturbation reference model was applied to input cells. Without matching real KO labels in this input dataset, AUC/R2/MAE accuracy metrics are not computed.")
     _auto_make_cards(Path(args.out_dir), "predicted_ko_delta.csv", confidence_name="transfer_confidence.csv")
+    _auto_diagnose(Path(args.out_dir), "predicted_ko_delta.csv", confidence_name="transfer_confidence.csv")
+    _auto_summarize(Path(args.out_dir))
 
 
 def run_inspect_reference(args: argparse.Namespace) -> None:
+    from .reference import inspect_reference_model
+
     result = inspect_reference_model(
         reference_model=args.reference_model,
         out_dir=args.out_dir,
@@ -420,6 +520,8 @@ def run_inspect_reference(args: argparse.Namespace) -> None:
 
 
 def run_double_interaction_command(args: argparse.Namespace) -> None:
+    from .interaction import run_double_interaction
+
     metrics, predictions = run_double_interaction(
         delta_csv=args.delta_csv,
         ko_col=args.ko_col,
@@ -496,6 +598,19 @@ def build_parser() -> argparse.ArgumentParser:
     figures.add_argument("--result-dir", required=True, help="Existing result directory to scan.")
     figures.add_argument("--out-dir", default=None, help="Output directory. Default: result-dir/figure_package.")
     figures.set_defaults(func=run_figure_package)
+    diagnose = sub.add_parser("diagnose-results", help="Explain which virtual KO results are reliable or risky and why.")
+    diagnose.add_argument("--delta-csv", required=True, help="delta_table.csv from evaluation or predicted_ko_delta.csv from apply-reference.")
+    diagnose.add_argument("--manifest-csv", default=None, help="Optional derived_state_manifest.csv for modality-aware explanations.")
+    diagnose.add_argument("--confidence-csv", default=None, help="Optional transfer_confidence.csv from apply-reference.")
+    diagnose.add_argument("--min-true-delta", type=float, default=0.03, help="True-delta magnitude below which direction/AUC interpretation is unstable.")
+    diagnose.add_argument("--large-error", type=float, default=None, help="Optional absolute-error threshold. Default: data-adaptive 75th percentile.")
+    diagnose.add_argument("--max-features-per-ko", type=int, default=25)
+    diagnose.add_argument("--out-dir", default="results/failure_diagnosis")
+    diagnose.set_defaults(func=run_diagnose_results)
+    summarize = sub.add_parser("summarize-result", help="Build one user-readable report from an existing VKX result directory.")
+    summarize.add_argument("--result-dir", required=True, help="Existing VKX result directory containing delta_table.csv or predicted_ko_delta.csv.")
+    summarize.add_argument("--out-dir", default=None, help="Output directory. Default: result-dir/readable_result_report.")
+    summarize.set_defaults(func=run_summarize_result)
     multiome = sub.add_parser("assemble-multiome", help="Assemble RNA and ATAC matrices plus KO metadata into one benchmark-ready h5ad.")
     multiome.add_argument("--rna-input", required=True)
     multiome.add_argument("--rna-format", required=True, choices=["h5ad", "10x_mtx", "10x_h5"])

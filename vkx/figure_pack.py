@@ -14,6 +14,8 @@ FIGURE_EXPLANATIONS = {
     "05_prior_coverage.png": "Whether the requested KO genes are covered by pathway, TF, PPI or motif priors.",
     "07_uncertainty_intervals.png": "Hard-constrained residual uncertainty interval around predicted KO deltas.",
     "08_uncertainty_virtual_cell_pca.png": "Input, virtual KO and uncertainty virtual cells in state space.",
+    "01_failure_diagnosis_overview.png": "KO-level reliability diagnosis: direction agreement and warning/high-risk feature counts.",
+    "02_feature_error_heatmap.png": "Feature-level error heatmap showing where virtual KO differs from real KO.",
     "benchmark_overview.png": "Input benchmark readiness and perturbation label distribution.",
     "benchmark_modalities.png": "Detected RNA/protein/ATAC modality feature counts.",
     "double_interaction_metrics.png": "Single-gene additive vs interaction residual double-KO performance.",
