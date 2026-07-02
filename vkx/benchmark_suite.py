@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import html
 from pathlib import Path
 import shutil
 
@@ -107,6 +108,7 @@ def run_benchmark_suite(
     )
     figure_index = _write_figure_index(out, formal_dirs, paper_result_dirs)
     _write_suite_report(out, jobs, formal_dirs, template_paths, aggregate, paper, figure_index, external_predictions_csv)
+    _write_suite_html_report(out, jobs, formal_dirs, template_paths, aggregate, paper, figure_index, external_predictions_csv)
     return {
         "jobs": job_table,
         "formal": aggregate["formal"],
@@ -281,6 +283,7 @@ No runnable benchmark jobs were found.
 Use `benchmark_suite_config_template.csv` to provide labelled perturbation state tables. A labelled table needs one row per cell, a KO label column, and numeric state features such as pathway/program scores, protein scores, ATAC gene activity, chromVAR, or peak features.
 """
     (out / "benchmark_suite_report_zh.md").write_text(text, encoding="utf-8")
+    _write_empty_html_report(out)
 
 
 def _write_suite_report(
@@ -357,6 +360,154 @@ def _write_suite_report(
     if not paper.get("metrics", pd.DataFrame()).empty:
         lines.append(f"论文图包方法行数：`{len(paper['metrics'])}`。")
     (out / "benchmark_suite_report_zh.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_empty_html_report(out: Path) -> None:
+    html_text = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>VKX benchmark suite report</title>
+  <style>
+    body { font-family: Arial, "Microsoft YaHei", sans-serif; margin: 40px; color: #222; line-height: 1.65; }
+    main { max-width: 1080px; margin: 0 auto; }
+    .note { border-left: 5px solid #2f9e8f; background: #f3fbf9; padding: 14px 18px; }
+    code { background: #f5f5f5; padding: 2px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body><main>
+  <h1>VKX benchmark suite report</h1>
+  <p class="note">No runnable benchmark jobs were found.</p>
+  <p>Use <code>benchmark_suite_config_template.csv</code> to provide labelled perturbation state tables.</p>
+</main></body></html>
+"""
+    (out / "benchmark_suite_report_zh.html").write_text(html_text, encoding="utf-8")
+
+
+def _write_suite_html_report(
+    out: Path,
+    jobs: list[BenchmarkJob],
+    formal_dirs: list[Path],
+    template_paths: list[Path],
+    aggregate: dict[str, pd.DataFrame],
+    paper: dict[str, pd.DataFrame],
+    figure_index: pd.DataFrame,
+    external_predictions_csv: str | Path | None,
+) -> None:
+    best = aggregate.get("best", pd.DataFrame())
+    metrics = aggregate.get("formal", pd.DataFrame())
+    paper_metrics = paper.get("metrics", pd.DataFrame())
+    main_figures = [
+        ("00_publication_main_figure.png", "Figure 1. 总览主图：方法、横向比较、真实/虚拟 KO 和多场景覆盖。"),
+        ("01_method_leaderboard.png", "Figure 2. 方法排行榜：AUC/R2/MAE 放在同一张图里。"),
+        ("02_auc_roc_curves.png", "Figure 3. AUC 曲线：展示强响应特征排序能力。"),
+        ("03_real_vs_virtual_method_heatmap.png", "Figure 4. 真实 KO 与虚拟 KO 的 delta heatmap。"),
+        ("04_single_double_multimodal_gallery.png", "Figure 5. 单敲、双敲、多模态和 ATAC 结果汇总。"),
+        ("05_adaptive_improvement.png", "Figure 6. VKXAdaptive 相对原始 VKX 和 classical baseline 的变化。"),
+        ("06_benchmark_completeness.png", "Figure 7. 哪些方法和数据已经评分，哪些仍是待补齐槽位。"),
+    ]
+    cards = []
+    if not best.empty:
+        for _, row in best.iterrows():
+            cards.append(
+                f"<li><b>{_h(row['benchmark_id'])}</b>: best = <b>{_h(row['best_method'])}</b>, "
+                f"AUC={_fmt(row.get('roc_auc'))}, R2={_fmt(row.get('r2'))}, MAE={_fmt(row.get('mae'))}</li>"
+            )
+    else:
+        cards.append("<li>暂无可聚合分数。</li>")
+    jobs_html = "\n".join(
+        f"<tr><td>{_h(job.dataset_id)}</td><td><code>{_h(job.state_csv)}</code></td>"
+        f"<td>{_h(', '.join(job.target_kos))}</td><td><code>{_h(formal_dir)}</code></td></tr>"
+        for job, formal_dir in zip(jobs, formal_dirs)
+    )
+    templates_html = "\n".join(f"<li><code>{_h(path)}</code></li>" for path in template_paths)
+    figure_html = "\n".join(
+        _figure_block(out / "top_figures" / filename, caption)
+        for filename, caption in main_figures
+        if (out / "top_figures" / filename).exists()
+    )
+    scored_rows = 0
+    if not metrics.empty and "method" in metrics.columns:
+        scored_rows = int(
+            metrics["method"]
+            .astype(str)
+            .str.contains("VKX|PLS|Ridge|Additive|Ensemble|Boosted|Calibrated", regex=True, na=False)
+            .sum()
+        )
+    external_status = "已提供外部预测表。" if external_predictions_csv else "未提供外部预测表，scGen/CPA/GEARS/CellOT 不会被假装计分。"
+    html_text = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>VKX 补强总包 benchmark 报告</title>
+  <style>
+    :root {{ --ink: #202124; --muted: #5f6368; --line: #dadce0; --brand: #2f9e8f; --soft: #f3fbf9; }}
+    body {{ font-family: Arial, "Microsoft YaHei", "PingFang SC", sans-serif; margin: 0; color: var(--ink); background: #fff; line-height: 1.65; }}
+    main {{ max-width: 1220px; margin: 0 auto; padding: 42px 34px 70px; }}
+    h1 {{ font-size: 34px; margin: 0 0 8px; }}
+    h2 {{ font-size: 23px; margin-top: 34px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }}
+    p, li, td, th {{ font-size: 15px; }}
+    .subtitle {{ color: var(--muted); margin-top: 0; }}
+    .summary {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 24px 0; }}
+    .card {{ border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; background: #fff; }}
+    .card b {{ font-size: 24px; display: block; color: var(--brand); }}
+    .note {{ border-left: 5px solid var(--brand); background: var(--soft); padding: 14px 18px; }}
+    table {{ width: 100%; border-collapse: collapse; margin: 14px 0 20px; }}
+    th, td {{ border-bottom: 1px solid var(--line); text-align: left; padding: 10px 8px; vertical-align: top; }}
+    th {{ background: #f8f9fa; }}
+    code {{ background: #f5f5f5; padding: 2px 5px; border-radius: 4px; }}
+    figure {{ margin: 28px 0 36px; border: 1px solid var(--line); border-radius: 8px; padding: 14px; }}
+    figure img {{ display: block; max-width: 100%; height: auto; margin: 0 auto; }}
+    figcaption {{ color: var(--muted); font-size: 14px; margin-top: 10px; }}
+    @media (max-width: 850px) {{ .summary {{ grid-template-columns: 1fr 1fr; }} main {{ padding: 26px 18px; }} }}
+  </style>
+</head>
+<body><main>
+  <h1>VKX 补强总包 benchmark 报告</h1>
+  <p class="subtitle">一条命令生成正式横向 benchmark、外部方法模板、聚合表和论文级 7 张主图。</p>
+  <section class="summary">
+    <div class="card"><b>{len(jobs)}</b>运行数据集</div>
+    <div class="card"><b>{scored_rows}</b>已评分 baseline 行</div>
+    <div class="card"><b>{len(figure_index)}</b>索引 PNG 图</div>
+    <div class="card"><b>{len(paper_metrics)}</b>论文图包方法行</div>
+  </section>
+  <section class="note">
+    <b>当前边界：</b>{_h(external_status)} 没有 KO 标签的普通 10X、DOGMA/TEA-seq 只能做 prediction-only 或 reference application，不能在该数据内部报告真实准确率。
+  </section>
+
+  <h2>本次实际运行的数据</h2>
+  <table><thead><tr><th>dataset_id</th><th>输入 state table</th><th>held-out KO</th><th>结果目录</th></tr></thead><tbody>{jobs_html}</tbody></table>
+
+  <h2>当前结论</h2>
+  <ul>{''.join(cards)}</ul>
+
+  <h2>7 张主图</h2>
+  {figure_html}
+
+  <h2>外部方法怎么补齐</h2>
+  <p>scGen、CPA、GEARS、CellOT 需要先按各自官方流程训练/推理，再把同一 held-out KO 的 <code>pred_delta_*</code> 填入模板。suite 只会评分真实提供的外部预测，不会把未运行方法当成结果。</p>
+  <ul>{templates_html}</ul>
+
+  <h2>输出文件</h2>
+  <ul>
+    <li><code>benchmark_suite_report_zh.md</code>: Markdown 报告。</li>
+    <li><code>benchmark_suite_report_zh.html</code>: 本 HTML 图文报告。</li>
+    <li><code>aggregate/formal_method_metrics_aggregate.csv</code>: 所有正式 benchmark 分数。</li>
+    <li><code>aggregate/formal_best_methods.csv</code>: 每个 benchmark 的最优方法。</li>
+    <li><code>benchmark_suite_figure_index.csv</code>: 全部图片索引。</li>
+  </ul>
+</main></body></html>
+"""
+    (out / "benchmark_suite_report_zh.html").write_text(html_text, encoding="utf-8")
+
+
+def _figure_block(path: Path, caption: str) -> str:
+    rel = path.parent.name + "/" + path.name
+    return f'<figure><img src="{_h(rel)}" alt="{_h(caption)}"><figcaption>{_h(caption)}</figcaption></figure>'
+
+
+def _h(value: object) -> str:
+    return html.escape(str(value), quote=True)
 
 
 def _parse_list(value: object) -> list[str]:

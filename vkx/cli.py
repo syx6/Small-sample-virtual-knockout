@@ -260,6 +260,7 @@ def run_benchmark_suite_command(args: argparse.Namespace) -> None:
     )
     print("Saved full benchmark suite:")
     print(f"  report: {args.out_dir}\\benchmark_suite_report_zh.md")
+    print(f"  html report: {args.out_dir}\\benchmark_suite_report_zh.html")
     print(f"  jobs: {args.out_dir}\\benchmark_suite_jobs.csv")
     print(f"  aggregate: {args.out_dir}\\aggregate\\aggregate_benchmark_report.md")
     print(f"  paper figures: {args.out_dir}\\paper_figures")
