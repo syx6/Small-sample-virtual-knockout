@@ -78,6 +78,7 @@ def run_benchmark_suite(
     job_table = _job_table(jobs)
     job_table.to_csv(out / "benchmark_suite_jobs.csv", index=False)
     _write_config_template(out)
+    _write_external_method_runbook(out)
 
     formal_dirs: list[Path] = []
     template_paths: list[Path] = []
@@ -234,6 +235,53 @@ def _write_config_template(out: Path) -> None:
     template.to_csv(out / "benchmark_suite_config_template.csv", index=False)
 
 
+def _write_external_method_runbook(out: Path) -> None:
+    text = """# External deep-method benchmark runbook
+
+This file makes the scGen/CPA/GEARS/CellOT slots executable without over-claiming.
+
+## Required prediction CSV schema
+
+Each external method must export one row per held-out KO target:
+
+```csv
+method,ko_target,pred_delta_feature1,pred_delta_feature2,pred_delta_feature3
+scGen,STAT1,-0.12,0.04,0.31
+CPA,STAT1,-0.10,0.05,0.25
+GEARS,STAT1,-0.15,0.02,0.28
+CellOT,STAT1,-0.11,0.03,0.30
+```
+
+Rules:
+
+- `method` must be one of `scGen`, `CPA`, `GEARS`, `CellOT`.
+- `ko_target` must match the held-out labels used by VKX.
+- Feature columns must be named `pred_delta_<feature>`.
+- The `<feature>` suffix must exactly match the state features in `formal_benchmark_truth.csv`.
+- The delta must be measured in the same state-score space as VKX, not raw counts.
+
+## Method-specific contract
+
+| method | What to run externally | What to export |
+|---|---|---|
+| scGen | Train/apply the perturbation autoencoder on the same train/test split. | Mean KO-control delta in state-score space. |
+| CPA | Train/apply CPA with the same perturbation labels and covariates. | Mean KO-control delta in state-score space. |
+| GEARS | Train/apply GEARS for the same gene or gene-pair perturbation. | Mean KO-control delta after mapping predicted genes to the same state features. |
+| CellOT | Run optimal-transport perturbation mapping from control to target KO. | Mean mapped-control delta in state-score space. |
+
+## How to score after export
+
+```bash
+python -m vkx.cli benchmark-suite \
+  --external-predictions-csv external_predictions.csv \
+  --out-dir results/full_benchmark_suite_with_external
+```
+
+VKX will then compute the same ROC-AUC, direction cosine, R2, MAE and heatmap for those external methods.
+"""
+    (out / "external_method_benchmark_runbook.md").write_text(text, encoding="utf-8")
+
+
 def _existing_result_dirs(paths: list[str]) -> list[Path]:
     return [Path(path) for path in paths if Path(path).exists()]
 
@@ -265,6 +313,10 @@ def _copy_top_figures(out: Path, figure_index: pd.DataFrame) -> None:
         "04_single_double_multimodal_gallery.png",
         "05_adaptive_improvement.png",
         "06_benchmark_completeness.png",
+        "07_before_after_umap_panel.png",
+        "08_single_double_response_map.png",
+        "09_peak_locus_track.png",
+        "10_method_radar_leaderboard.png",
     ]
     for name in preferred:
         rows = figure_index.loc[figure_index["figure"] == name] if not figure_index.empty else pd.DataFrame()
@@ -306,7 +358,7 @@ def _write_suite_report(
         "- 一条命令运行多数据集正式 benchmark。",
         "- 同时比较 VKXAdaptive、ResponseBoosted、ConstrainedEnsemble、Calibrated、VKX、PLS、Ridge 和 Additive。",
         "- 为 scGen、CPA、GEARS、CellOT 生成严格横向比较模板；只有用户提供同一 held-out KO 的外部预测后才计入分数。",
-        "- 自动生成聚合 leaderboard、AUC ROC 曲线、真实/虚拟 KO heatmap 和 7 张论文级主图。",
+        "- 自动生成聚合 leaderboard、AUC ROC 曲线、真实/虚拟 KO heatmap、UMAP、response map、peak locus track 和 11 张论文级主图。",
         "- 保留 batch covariate、double-KO interaction residual、ATAC peak annotation/quantile calibration 等已集成能力的入口边界。",
         "",
         "## 本次实际运行的数据",
@@ -335,7 +387,7 @@ def _write_suite_report(
             "",
             "## 图在哪里",
             "",
-            "- 7 张主图在 `paper_figures/` 和 `top_figures/`。",
+            "- 核心 11 张主图在 `paper_figures/` 和 `top_figures/`。",
             "- 完整图片索引在 `benchmark_suite_figure_index.csv`。",
             f"- 本次共索引 `{len(figure_index)}` 张 PNG 图。",
             "",
@@ -352,6 +404,7 @@ def _write_suite_report(
             "- `aggregate/formal_best_methods.csv`: 每个 benchmark 的最优方法。",
             "- `paper_figures/paper_benchmark_report_zh.md`: 论文图包解释。",
             "- `benchmark_suite_config_template.csv`: 用户自有 labelled perturbation 数据配置模板。",
+            "- `external_method_benchmark_runbook.md`: scGen/CPA/GEARS/CellOT 外部方法接入和评分说明。",
         ]
     )
     if not metrics.empty:
@@ -405,6 +458,10 @@ def _write_suite_html_report(
         ("04_single_double_multimodal_gallery.png", "Figure 5. 单敲、双敲、多模态和 ATAC 结果汇总。"),
         ("05_adaptive_improvement.png", "Figure 6. VKXAdaptive 相对原始 VKX 和 classical baseline 的变化。"),
         ("06_benchmark_completeness.png", "Figure 7. 哪些方法和数据已经评分，哪些仍是待补齐槽位。"),
+        ("07_before_after_umap_panel.png", "Figure 8. before/after UMAP：虚拟 KO 细胞是否从 control 移向真实 KO 状态。"),
+        ("08_single_double_response_map.png", "Figure 9. single KO vs double KO response map：不同任务的响应强弱和误差。"),
+        ("09_peak_locus_track.png", "Figure 10. ATAC peak locus track：真实与虚拟 peak accessibility delta。"),
+        ("10_method_radar_leaderboard.png", "Figure 11. method comparison radar/leaderboard：多指标方法权衡和外部方法状态。"),
     ]
     cards = []
     if not best.empty:
@@ -464,7 +521,7 @@ def _write_suite_html_report(
 </head>
 <body><main>
   <h1>VKX 补强总包 benchmark 报告</h1>
-  <p class="subtitle">一条命令生成正式横向 benchmark、外部方法模板、聚合表和论文级 7 张主图。</p>
+  <p class="subtitle">一条命令生成正式横向 benchmark、外部方法模板、聚合表和论文级 11 张主图。</p>
   <section class="summary">
     <div class="card"><b>{len(jobs)}</b>运行数据集</div>
     <div class="card"><b>{scored_rows}</b>已评分 baseline 行</div>
@@ -481,12 +538,13 @@ def _write_suite_html_report(
   <h2>当前结论</h2>
   <ul>{''.join(cards)}</ul>
 
-  <h2>7 张主图</h2>
+  <h2>核心主图</h2>
   {figure_html}
 
   <h2>外部方法怎么补齐</h2>
   <p>scGen、CPA、GEARS、CellOT 需要先按各自官方流程训练/推理，再把同一 held-out KO 的 <code>pred_delta_*</code> 填入模板。suite 只会评分真实提供的外部预测，不会把未运行方法当成结果。</p>
   <ul>{templates_html}</ul>
+  <p>详细格式和方法合同见 <code>external_method_benchmark_runbook.md</code>。</p>
 
   <h2>输出文件</h2>
   <ul>
@@ -495,6 +553,7 @@ def _write_suite_html_report(
     <li><code>aggregate/formal_method_metrics_aggregate.csv</code>: 所有正式 benchmark 分数。</li>
     <li><code>aggregate/formal_best_methods.csv</code>: 每个 benchmark 的最优方法。</li>
     <li><code>benchmark_suite_figure_index.csv</code>: 全部图片索引。</li>
+    <li><code>external_method_benchmark_runbook.md</code>: scGen/CPA/GEARS/CellOT 外部预测接入说明。</li>
   </ul>
 </main></body></html>
 """

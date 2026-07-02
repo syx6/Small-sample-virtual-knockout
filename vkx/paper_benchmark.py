@@ -38,6 +38,10 @@ def make_paper_benchmark_package(
     _plot_result_gallery(result_summary, out)
     _plot_adaptive_improvement(metrics, out)
     _plot_benchmark_completeness(availability, result_summary, out)
+    _plot_before_after_umap(result_paths, out)
+    _plot_single_double_response_map(result_summary, out)
+    _plot_peak_locus_track(result_paths, out)
+    _plot_method_radar(metrics, availability, out)
     _copy_key_figures(formal_path, result_paths, out)
     _write_report(out, formal_path, result_paths, metrics, availability, result_summary)
     return {
@@ -299,6 +303,229 @@ def _plot_benchmark_completeness(availability: pd.DataFrame, result_summary: pd.
     img.save(out / "06_benchmark_completeness.png")
 
 
+def _plot_before_after_umap(result_dirs: list[Path], out: Path) -> None:
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        return
+    entries = []
+    for path in result_dirs:
+        fig = path / "03_cell_state_umap.png"
+        if fig.exists():
+            entries.append((path, fig))
+    if not entries:
+        return
+    width, height = 2200, 1500
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    title_font = _pil_font(32)
+    font = _pil_font(18)
+    small = _pil_font(14)
+    draw.text((42, 28), "Before/after cell-state movement by UMAP", fill=(18, 18, 18), font=title_font)
+    draw.text((42, 68), "Each panel asks whether virtual KO cells move away from control and toward the true KO state.", fill=(80, 80, 80), font=font)
+    slots = [(42, 135, 1040, 640), (1120, 135, 1040, 640), (42, 830, 1040, 640), (1120, 830, 1040, 640)]
+    for (path, fig), (x, y, w, h) in zip(entries[:4], slots):
+        draw.rounded_rectangle((x, y, x + w, y + h), radius=10, outline=(220, 220, 220), fill=(250, 250, 250))
+        label = _result_title(path)
+        draw.text((x + 22, y + 18), label, fill=(25, 25, 25), font=font)
+        try:
+            panel = Image.open(fig).convert("RGB")
+            panel.thumbnail((w - 48, h - 82))
+            px = x + (w - panel.width) // 2
+            py = y + 58 + (h - 92 - panel.height) // 2
+            img.paste(panel, (px, py))
+        except Exception:
+            draw.text((x + 22, y + 70), f"Could not read {fig.name}", fill=(120, 70, 70), font=small)
+    img.save(out / "07_before_after_umap_panel.png")
+
+
+def _plot_single_double_response_map(result_summary: pd.DataFrame, out: Path) -> None:
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        return
+    if result_summary.empty:
+        return
+    rows = result_summary.copy()
+    for col in ["roc_auc", "mean_direction_cosine", "mean_distribution_improvement", "improved_fraction", "mean_abs_delta_error"]:
+        rows[col] = pd.to_numeric(rows[col], errors="coerce")
+    rows["label"] = rows.apply(_display_result_label, axis=1)
+    metrics = [
+        ("roc_auc", "AUC", 0.0, 1.0, False),
+        ("mean_direction_cosine", "Direction", 0.0, 1.0, False),
+        ("improved_fraction", "Hit-rate", 0.0, 1.0, False),
+        ("mean_distribution_improvement", "Distribution", -0.25, 0.75, False),
+        ("mean_abs_delta_error", "MAE", 0.0, max(0.01, float(rows["mean_abs_delta_error"].max(skipna=True) or 0.01)), True),
+    ]
+    cell_w, cell_h = 210, 82
+    width = 1750
+    height = max(520, 170 + cell_h * min(len(rows), 8) + 80)
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    title_font = _pil_font(28)
+    font = _pil_font(16)
+    small = _pil_font(12)
+    draw.text((40, 26), "Single-KO vs double-KO response map", fill=(18, 18, 18), font=title_font)
+    draw.text((40, 62), "Green means stronger evidence. Blue on MAE means lower error. This summarizes biological task difficulty, not only method rank.", fill=(80, 80, 80), font=font)
+    left, top = 360, 145
+    for j, (_, name, _, _, _) in enumerate(metrics):
+        draw.text((left + j * cell_w + 12, top - 36), name, fill=(35, 35, 35), font=font)
+    for i, (_, row) in enumerate(rows.head(8).iterrows()):
+        y = top + i * cell_h
+        draw.text((40, y + 18), _short(row["label"], 35), fill=(25, 25, 25), font=font)
+        draw.text((250, y + 20), _short(row.get("task_type", ""), 16), fill=(90, 90, 90), font=small)
+        for j, (col, _, vmin, vmax, lower) in enumerate(metrics):
+            x = left + j * cell_w
+            value = float(row[col]) if pd.notna(row[col]) else np.nan
+            frac = 0.0 if not np.isfinite(value) else min(max((value - vmin) / (vmax - vmin + 1e-9), 0), 1)
+            frac = 1 - frac if lower else frac
+            color = _blend((245, 245, 245), (76, 120, 168) if lower else (42, 157, 143), frac)
+            draw.rounded_rectangle((x, y, x + cell_w - 16, y + cell_h - 12), radius=6, fill=color, outline=(255, 255, 255))
+            label = "NA" if not np.isfinite(value) else f"{value:.2f}"
+            text_color = (255, 255, 255) if frac > 0.58 else (30, 30, 30)
+            draw.text((x + 72, y + 27), label, fill=text_color, font=font)
+    img.save(out / "08_single_double_response_map.png")
+
+
+def _plot_peak_locus_track(result_dirs: list[Path], out: Path) -> None:
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        return
+    peak_rows = _collect_peak_deltas(result_dirs)
+    if not peak_rows:
+        return
+    width, height = 1900, 940
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    title_font = _pil_font(28)
+    font = _pil_font(15)
+    small = _pil_font(12)
+    draw.text((38, 28), "Peak locus track: true vs virtual ATAC response", fill=(18, 18, 18), font=title_font)
+    draw.text((38, 64), "Selected peak-level features are placed by genomic coordinate when parsable; bar height shows KO accessibility delta.", fill=(80, 80, 80), font=font)
+    chrom_groups: dict[str, list[dict]] = {}
+    for row in peak_rows[:46]:
+        chrom_groups.setdefault(row["chrom"], []).append(row)
+    y = 180
+    for chrom, rows in list(chrom_groups.items())[:6]:
+        rows = sorted(rows, key=lambda r: r["start"])
+        min_pos = min(r["start"] for r in rows)
+        max_pos = max(r["end"] for r in rows)
+        span = max(max_pos - min_pos, 1)
+        left, right = 210, 1780
+        draw.text((38, y - 8), chrom, fill=(25, 25, 25), font=font)
+        draw.line((left, y, right, y), fill=(160, 160, 160), width=2)
+        draw.text((left, y + 18), f"{min_pos:,}", fill=(85, 85, 85), font=small)
+        draw.text((right - 82, y + 18), f"{max_pos:,}", fill=(85, 85, 85), font=small)
+        label_candidates = sorted(rows, key=lambda item: (item["gene"].upper() == "KDM6A", abs(item["true"])), reverse=True)[:2]
+        label_ids = {id(item): idx for idx, item in enumerate(label_candidates)}
+        for row in rows:
+            x = left + int((row["start"] - min_pos) / span * (right - left))
+            true_h = int(max(min(abs(row["true"]) * 430, 95), 3))
+            pred_h = int(max(min(abs(row["pred"]) * 430, 95), 3))
+            true_color = (190, 70, 70) if row["true"] >= 0 else (70, 90, 180)
+            pred_color = (230, 150, 110) if row["pred"] >= 0 else (120, 145, 210)
+            draw.rectangle((x - 5, y - true_h if row["true"] >= 0 else y, x + 1, y if row["true"] >= 0 else y + true_h), fill=true_color)
+            draw.rectangle((x + 2, y - pred_h if row["pred"] >= 0 else y, x + 8, y if row["pred"] >= 0 else y + pred_h), fill=pred_color)
+            if id(row) in label_ids:
+                offset = [-58, 46][label_ids[id(row)] % 2]
+                label_y = y + offset
+                if x - left < 130:
+                    label_x = x + 28
+                elif right - x < 170:
+                    label_x = x - 170
+                else:
+                    label_x = x - 76
+                label_x = max(left + 8, min(label_x, right - 170))
+                draw.line((x, y - 5 if row["true"] >= 0 else y + 5, label_x + 8, label_y + 14), fill=(155, 155, 155), width=1)
+                draw.text((label_x, label_y), _short(row["gene"] + " " + row["type"], 19), fill=(35, 35, 35), font=small)
+        y += 118
+    draw.rectangle((1285, 805, 1315, 825), fill=(190, 70, 70))
+    draw.text((1326, 803), "true KO delta +", fill=(35, 35, 35), font=small)
+    draw.rectangle((1285, 835, 1315, 855), fill=(230, 150, 110))
+    draw.text((1326, 833), "virtual KO delta +", fill=(35, 35, 35), font=small)
+    draw.rectangle((1510, 805, 1540, 825), fill=(70, 90, 180))
+    draw.text((1552, 803), "true KO delta -", fill=(35, 35, 35), font=small)
+    draw.rectangle((1510, 835, 1540, 855), fill=(120, 145, 210))
+    draw.text((1552, 833), "virtual KO delta -", fill=(35, 35, 35), font=small)
+    img.save(out / "09_peak_locus_track.png")
+
+
+def _plot_method_radar(metrics: pd.DataFrame, availability: pd.DataFrame, out: Path) -> None:
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        return
+    if metrics.empty:
+        return
+    rows = metrics.copy()
+    for col in ["roc_auc", "direction_cosine", "r2", "mae", "feature_hit_rate"]:
+        rows[col] = pd.to_numeric(rows[col], errors="coerce")
+    rows = rows.loc[rows["method"].astype(str).isin(["VKXAdaptive", "ResponseBoosted", "ConstrainedEnsemble", "CalibratedEnsemble", "PLS", "Ridge", "VKX"])].copy()
+    if rows.empty:
+        return
+    max_mae = max(float(rows["mae"].max(skipna=True) or 0.01), 0.01)
+    axes = [
+        ("AUC", "roc_auc", 0, 1, False),
+        ("Direction", "direction_cosine", 0, 1, False),
+        ("R2", "r2", -0.5, 1, False),
+        ("Hit-rate", "feature_hit_rate", 0, 1, False),
+        ("low MAE", "mae", 0, max_mae, True),
+    ]
+    width, height = 1500, 1050
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    title_font = _pil_font(28)
+    font = _pil_font(15)
+    small = _pil_font(12)
+    draw.text((38, 30), "Method comparison radar and leaderboard", fill=(18, 18, 18), font=title_font)
+    draw.text((38, 66), "Radar normalizes heterogeneous metrics so method trade-offs are visible; exact values remain in the leaderboard CSV.", fill=(80, 80, 80), font=font)
+    cx, cy, radius = 500, 520, 310
+    for frac in [0.25, 0.5, 0.75, 1.0]:
+        points = [_radar_point(cx, cy, radius * frac, k, len(axes)) for k in range(len(axes))]
+        draw.line(points + [points[0]], fill=(225, 225, 225), width=1)
+    for k, (name, *_rest) in enumerate(axes):
+        x, y = _radar_point(cx, cy, radius + 38, k, len(axes))
+        draw.text((x - 36, y - 9), name, fill=(35, 35, 35), font=small)
+        draw.line((cx, cy, *_radar_point(cx, cy, radius, k, len(axes))), fill=(230, 230, 230), width=1)
+    colors = _method_colors()
+    ordered = rows.sort_values(["roc_auc", "r2"], ascending=False).head(6)
+    for _, row in ordered.iterrows():
+        pts = []
+        for k, (_, col, vmin, vmax, lower) in enumerate(axes):
+            value = float(row[col]) if pd.notna(row[col]) else np.nan
+            frac = 0 if not np.isfinite(value) else min(max((value - vmin) / (vmax - vmin + 1e-9), 0), 1)
+            frac = 1 - frac if lower else frac
+            pts.append(_radar_point(cx, cy, radius * frac, k, len(axes)))
+        color = colors.get(str(row["method"]), (80, 80, 80))
+        draw.line(pts + [pts[0]], fill=color, width=3)
+        for x, y in pts:
+            draw.ellipse((x - 4, y - 4, x + 4, y + 4), fill=color)
+    legend_x, legend_y = 900, 150
+    draw.text((legend_x, legend_y - 44), "Scored methods", fill=(25, 25, 25), font=font)
+    for i, (_, row) in enumerate(ordered.iterrows()):
+        y = legend_y + i * 52
+        color = colors.get(str(row["method"]), (80, 80, 80))
+        draw.rectangle((legend_x, y, legend_x + 26, y + 18), fill=color)
+        draw.text((legend_x + 40, y - 3), _method_short(row["method"]), fill=(25, 25, 25), font=font)
+        draw.text((legend_x + 260, y - 2), f"AUC {_fmt(row['roc_auc'])} | R2 {_fmt(row['r2'])} | MAE {_fmt(row['mae'])}", fill=(75, 75, 75), font=small)
+    y = legend_y + 340
+    draw.text((legend_x, y), "External method status", fill=(25, 25, 25), font=font)
+    y += 38
+    for method in EXTERNAL_METHOD_ORDER:
+        status = "not_run"
+        if not availability.empty and {"method", "status"}.issubset(availability.columns):
+            sub = availability.loc[availability["method"].astype(str).str.lower() == method.lower()]
+            if not sub.empty:
+                status = str(sub["status"].iloc[0])
+        color = colors.get(method, (120, 120, 120))
+        draw.rectangle((legend_x, y, legend_x + 26, y + 18), fill=color)
+        draw.text((legend_x + 40, y - 3), method, fill=(25, 25, 25), font=font)
+        draw.text((legend_x + 170, y - 1), status, fill=(130, 70, 70) if status == "not_run" else (45, 110, 75), font=small)
+        y += 42
+    img.save(out / "10_method_radar_leaderboard.png")
+
+
 def _copy_key_figures(formal_dir: Path, result_dirs: list[Path], out: Path) -> None:
     asset_dir = out / "assets"
     if asset_dir.exists():
@@ -375,6 +602,14 @@ def _write_report(
         "",
         "![Benchmark completeness](06_benchmark_completeness.png)",
         "",
+        "![Before/after UMAP](07_before_after_umap_panel.png)",
+        "",
+        "![Single vs double response map](08_single_double_response_map.png)",
+        "",
+        "![Peak locus track](09_peak_locus_track.png)",
+        "",
+        "![Method radar and leaderboard](10_method_radar_leaderboard.png)",
+        "",
         "## Best current method in the formal benchmark",
         "",
         best,
@@ -390,6 +625,7 @@ def _write_report(
         "1. Formal benchmark: VKX is compared with ridge/PLS/additive and explicit scGen/CPA/GEARS/CellOT slots. External methods are not silently counted unless their prediction CSV is supplied.",
         "2. VKX optimization: boosted/adaptive response anchor, double-KO interaction residual, and ATAC quantile/zero-inflated shape calibration are promoted as the current optimization path.",
         "3. Visualization: the package now contains a method leaderboard, ROC curves, real-vs-virtual heatmap, single/double/multimodal gallery, and copied source figures in `assets/`.",
+        "4. Publication figure extension: the package now also includes before/after UMAP, single-vs-double response map, ATAC peak locus track, and radar/leaderboard panels.",
         "",
         "## Remaining weaknesses",
         "",
@@ -896,6 +1132,80 @@ def _figure_explanation(name: str) -> str:
     return "Benchmark figure copied from the source result directory."
 
 
+def _result_title(path: Path) -> str:
+    text = path.name.lower()
+    if "single" in text or "papalexi" in text:
+        return "Single KO: RNA + ADT"
+    if "hmpcite" in text:
+        return "Double KO: RNA + ADT"
+    if "double" in text or "norman" in text:
+        return "Double KO: RNA programs"
+    if "atac" in text or "peak" in text:
+        return "ATAC peak-level KO"
+    return path.name.replace("_", " ")
+
+
+def _collect_peak_deltas(result_dirs: list[Path]) -> list[dict]:
+    rows: list[dict] = []
+    for path in result_dirs:
+        table_path = path / "delta_table.csv"
+        if not table_path.exists():
+            continue
+        try:
+            table = pd.read_csv(table_path, nrows=1)
+        except Exception:
+            continue
+        if table.empty:
+            continue
+        row = table.iloc[0]
+        peaks = []
+        for col in table.columns:
+            if not col.startswith("true_delta_peak_"):
+                continue
+            feature = col.removeprefix("true_delta_")
+            pred_col = f"pred_delta_{feature}"
+            if pred_col not in table.columns:
+                continue
+            parsed = _parse_peak_feature(feature)
+            if parsed is None:
+                continue
+            true = pd.to_numeric(pd.Series([row.get(col)]), errors="coerce").iloc[0]
+            pred = pd.to_numeric(pd.Series([row.get(pred_col)]), errors="coerce").iloc[0]
+            if not np.isfinite(true) or not np.isfinite(pred):
+                continue
+            parsed["true"] = float(true)
+            parsed["pred"] = float(pred)
+            parsed["score"] = abs(float(true)) + 0.35 * abs(float(pred))
+            peaks.append(parsed)
+        rows.extend(sorted(peaks, key=lambda item: item["score"], reverse=True)[:48])
+    return sorted(rows, key=lambda item: item["score"], reverse=True)
+
+
+def _parse_peak_feature(feature: str) -> dict | None:
+    parts = feature.split("_")
+    if len(parts) < 6 or parts[0] != "peak":
+        return None
+    chrom = parts[1]
+    try:
+        start = int(parts[2])
+        end = int(parts[3])
+    except Exception:
+        return None
+    peak_type = parts[-1]
+    gene = "_".join(parts[4:-1]) or "peak"
+    return {"chrom": chrom, "start": start, "end": end, "gene": gene, "type": peak_type}
+
+
+def _radar_point(cx: int, cy: int, radius: float, idx: int, n: int) -> tuple[int, int]:
+    angle = -np.pi / 2 + 2 * np.pi * idx / n
+    return int(cx + radius * np.cos(angle)), int(cy + radius * np.sin(angle))
+
+
+def _blend(low: tuple[int, int, int], high: tuple[int, int, int], frac: float) -> tuple[int, int, int]:
+    frac = min(max(float(frac), 0.0), 1.0)
+    return tuple(int(low[i] + (high[i] - low[i]) * frac) for i in range(3))
+
+
 def _unique(directory: Path, name: str) -> str:
     candidate = name
     stem = Path(name).stem
@@ -910,6 +1220,13 @@ def _unique(directory: Path, name: str) -> str:
 def _short(value: object, max_len: int) -> str:
     text = str(value)
     return text if len(text) <= max_len else text[: max_len - 3] + "..."
+
+
+def _fmt(value: object) -> str:
+    try:
+        return f"{float(value):.3f}"
+    except Exception:
+        return "NA"
 
 
 def _pil_font(size: int):

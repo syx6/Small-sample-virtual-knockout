@@ -242,6 +242,10 @@ def run_paper_benchmark(args: argparse.Namespace) -> None:
     print(f"           {args.out_dir}\\04_single_double_multimodal_gallery.png")
     print(f"           {args.out_dir}\\05_adaptive_improvement.png")
     print(f"           {args.out_dir}\\06_benchmark_completeness.png")
+    print(f"           {args.out_dir}\\07_before_after_umap_panel.png")
+    print(f"           {args.out_dir}\\08_single_double_response_map.png")
+    print(f"           {args.out_dir}\\09_peak_locus_track.png")
+    print(f"           {args.out_dir}\\10_method_radar_leaderboard.png")
 
 
 def run_benchmark_suite_command(args: argparse.Namespace) -> None:

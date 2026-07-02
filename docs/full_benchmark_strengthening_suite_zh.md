@@ -27,7 +27,7 @@ python -m vkx.cli benchmark-suite --out-dir results/full_benchmark_suite
 - `aggregate/formal_method_metrics_aggregate.csv`: 所有正式 benchmark 的分数。
 - `aggregate/formal_best_methods.csv`: 每个 benchmark 的最佳方法。
 - `paper_figures/`: 论文级主图包。
-- `top_figures/`: 复制出的 7 张主图，方便直接查看。
+- `top_figures/`: 复制出的核心 11 张主图，方便直接查看。
 - `formal_*/external_prediction_template.csv`: scGen、CPA、GEARS、CellOT 的预测填表模板。
 
 ## 3. 默认运行哪些数据
@@ -104,7 +104,7 @@ cell_002,STAT1,-0.35,0.20,0.18,-0.42,1
 
 这些方法不会被假装运行。suite 会生成 `external_prediction_template.csv`，用户或后续脚本把外部方法对同一 held-out KO 的 `pred_delta_*` 填进去后，再重新运行 suite，才会纳入同口径评分。
 
-## 6. 7 张主图
+## 6. 核心 11 张主图
 
 `paper_figures/` 和 `top_figures/` 中会自动生成：
 
@@ -115,6 +115,10 @@ cell_002,STAT1,-0.35,0.20,0.18,-0.42,1
 5. `04_single_double_multimodal_gallery.png`: 单敲、双敲、多模态结果汇总。
 6. `05_adaptive_improvement.png`: VKXAdaptive 相比原始 VKX/PLS/Ridge 的改进。
 7. `06_benchmark_completeness.png`: 哪些 benchmark 已完成，哪些因为缺少外部预测或数据而不能评分。
+8. `07_before_after_umap_panel.png`: control、virtual KO、true KO 的单细胞状态移动图。
+9. `08_single_double_response_map.png`: single KO、double KO、多模态和 ATAC 场景的响应强弱图。
+10. `09_peak_locus_track.png`: ATAC peak locus track，展示真实和虚拟 peak accessibility delta。
+11. `10_method_radar_leaderboard.png`: 多指标 radar/leaderboard，展示方法权衡和外部方法状态。
 
 ## 7. 仍然不能跳过的现实边界
 
