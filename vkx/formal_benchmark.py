@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import importlib.util
 
 import numpy as np
 import pandas as pd
@@ -75,13 +76,7 @@ def run_formal_benchmark(
             predictions.append(pred)
             availability.append({"method": method, "status": "provided", "reason": "Loaded from external prediction CSV."})
         else:
-            availability.append(
-                {
-                    "method": method,
-                    "status": "not_run",
-                    "reason": "No external prediction CSV was provided. Install/run the method separately and pass its predictions for a strict benchmark.",
-                }
-            )
+            availability.append(_external_method_availability(method))
 
     prediction_table = pd.concat([p for p in predictions if not p.empty], ignore_index=True) if predictions else pd.DataFrame()
     true_table = _true_delta_table(frame, ko_col, target_kos, features)
@@ -634,6 +629,26 @@ def _load_external_predictions(path: str | Path | None, features: list[str]) -> 
     return table
 
 
+def _external_method_availability(method: str) -> dict[str, str]:
+    package_specs = {
+        "scGen": ("scgen", "pip package `scgen` is available, but it is not installed in this environment."),
+        "CPA": ("cpa", "pip package `cpa-tools` is available, but the CPA module is not installed/importable in this environment."),
+        "GEARS": ("gears", "pip package `gears` is available, but it is not installed in this environment."),
+        "CellOT": ("cellot", "CellOT does not have a standard pip package in this environment; use the official/source workflow and import predictions."),
+    }
+    module, missing_reason = package_specs.get(method, (method.lower(), "Package is not installed."))
+    if method == "CellOT" and importlib.util.find_spec(module) is None:
+        status = "source_only_not_on_pip"
+        reason = missing_reason + " No same-split external prediction CSV was supplied."
+    elif importlib.util.find_spec(module) is None:
+        status = "package_missing"
+        reason = missing_reason + " No same-split external prediction CSV was supplied."
+    else:
+        status = "prediction_missing"
+        reason = "Package appears importable, but no same-split prediction CSV was supplied for strict state-space scoring."
+    return {"method": method, "status": status, "reason": reason}
+
+
 def _score_predictions(pred: pd.DataFrame, truth: pd.DataFrame, features: list[str]) -> pd.DataFrame:
     rows = []
     if pred.empty or truth.empty:
@@ -1062,7 +1077,7 @@ def _write_report(metrics: pd.DataFrame, availability: pd.DataFrame, out: Path) 
         "",
         "This benchmark compares VKX against classical baselines and reserves explicit slots for scGen, CPA, GEARS, and CellOT.",
         "",
-        "Deep external methods are marked `not_run` unless their prediction CSV is provided. This prevents accidental over-claiming.",
+        "Deep external methods are scored only when their prediction CSV is provided. Otherwise the availability table records whether the package is missing, source-only, or waiting for same-split predictions.",
         "",
         "## Metric Summary",
         "",

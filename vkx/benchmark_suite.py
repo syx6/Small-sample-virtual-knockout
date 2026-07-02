@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import html
+import importlib.util
 from pathlib import Path
 import shutil
 
@@ -78,6 +79,7 @@ def run_benchmark_suite(
     job_table = _job_table(jobs)
     job_table.to_csv(out / "benchmark_suite_jobs.csv", index=False)
     _write_config_template(out)
+    _write_external_environment_audit(out)
     _write_external_method_runbook(out)
 
     formal_dirs: list[Path] = []
@@ -282,6 +284,46 @@ VKX will then compute the same ROC-AUC, direction cosine, R2, MAE and heatmap fo
     (out / "external_method_benchmark_runbook.md").write_text(text, encoding="utf-8")
 
 
+def _write_external_environment_audit(out: Path) -> pd.DataFrame:
+    rows = [
+        {
+            "method": "scGen",
+            "python_module": "scgen",
+            "pip_distribution": "scgen",
+            "module_importable": bool(importlib.util.find_spec("scgen")),
+            "default_status_without_prediction_csv": "package_missing" if importlib.util.find_spec("scgen") is None else "prediction_missing",
+            "what_is_needed": "Install scGen and export same-split pred_delta_* predictions, or provide an external prediction CSV.",
+        },
+        {
+            "method": "CPA",
+            "python_module": "cpa",
+            "pip_distribution": "cpa-tools",
+            "module_importable": bool(importlib.util.find_spec("cpa")),
+            "default_status_without_prediction_csv": "package_missing" if importlib.util.find_spec("cpa") is None else "prediction_missing",
+            "what_is_needed": "Install CPA/cpa-tools and export same-split pred_delta_* predictions, or provide an external prediction CSV.",
+        },
+        {
+            "method": "GEARS",
+            "python_module": "gears",
+            "pip_distribution": "gears",
+            "module_importable": bool(importlib.util.find_spec("gears")),
+            "default_status_without_prediction_csv": "package_missing" if importlib.util.find_spec("gears") is None else "prediction_missing",
+            "what_is_needed": "Install GEARS and export same-split pred_delta_* predictions after mapping to VKX state features.",
+        },
+        {
+            "method": "CellOT",
+            "python_module": "cellot",
+            "pip_distribution": "not available on pip in this environment",
+            "module_importable": bool(importlib.util.find_spec("cellot")),
+            "default_status_without_prediction_csv": "source_only_not_on_pip" if importlib.util.find_spec("cellot") is None else "prediction_missing",
+            "what_is_needed": "Run the official/source CellOT workflow and export same-split pred_delta_* predictions.",
+        },
+    ]
+    table = pd.DataFrame(rows)
+    table.to_csv(out / "external_method_environment_audit.csv", index=False)
+    return table
+
+
 def _existing_result_dirs(paths: list[str]) -> list[Path]:
     return [Path(path) for path in paths if Path(path).exists()]
 
@@ -379,7 +421,7 @@ def _write_suite_report(
     if external_predictions_csv:
         lines.append(f"- 本次已读取外部预测表：`{external_predictions_csv}`。")
     else:
-        lines.append("- 本次没有外部预测表，所以 scGen/CPA/GEARS/CellOT 标记为 `not_run`，不会被假装计分。")
+        lines.append("- 本次没有外部预测表，所以 scGen/CPA/GEARS/CellOT 不会被假装计分；状态会写成 `package_missing`、`prediction_missing` 或 `source_only_not_on_pip`。")
     for path in template_paths:
         lines.append(f"- 外部方法预测模板：`{path}`。把对应方法预测的 `pred_delta_*` 填入后重新运行 suite 即可。")
     lines.extend(
@@ -404,6 +446,7 @@ def _write_suite_report(
             "- `aggregate/formal_best_methods.csv`: 每个 benchmark 的最优方法。",
             "- `paper_figures/paper_benchmark_report_zh.md`: 论文图包解释。",
             "- `benchmark_suite_config_template.csv`: 用户自有 labelled perturbation 数据配置模板。",
+            "- `external_method_environment_audit.csv`: scGen/CPA/GEARS/CellOT 本机环境审计结果。",
             "- `external_method_benchmark_runbook.md`: scGen/CPA/GEARS/CellOT 外部方法接入和评分说明。",
         ]
     )
@@ -491,7 +534,7 @@ def _write_suite_html_report(
             .str.contains("VKX|PLS|Ridge|Additive|Ensemble|Boosted|Calibrated", regex=True, na=False)
             .sum()
         )
-    external_status = "已提供外部预测表。" if external_predictions_csv else "未提供外部预测表，scGen/CPA/GEARS/CellOT 不会被假装计分。"
+    external_status = "已提供外部预测表。" if external_predictions_csv else "未提供外部预测表，scGen/CPA/GEARS/CellOT 不会被假装计分；本机环境状态见 external_method_environment_audit.csv。"
     html_text = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -553,6 +596,7 @@ def _write_suite_html_report(
     <li><code>aggregate/formal_method_metrics_aggregate.csv</code>: 所有正式 benchmark 分数。</li>
     <li><code>aggregate/formal_best_methods.csv</code>: 每个 benchmark 的最优方法。</li>
     <li><code>benchmark_suite_figure_index.csv</code>: 全部图片索引。</li>
+    <li><code>external_method_environment_audit.csv</code>: scGen/CPA/GEARS/CellOT 本机环境审计结果。</li>
     <li><code>external_method_benchmark_runbook.md</code>: scGen/CPA/GEARS/CellOT 外部预测接入说明。</li>
   </ul>
 </main></body></html>
