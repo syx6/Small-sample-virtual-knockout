@@ -1,89 +1,80 @@
 # Small-sample Multimodal Virtual Knockout (VKX)
 
-VKX 是一个面向小样本单细胞 perturbation 数据的虚拟敲除方法和软件原型。它的目标不是用大模型自由生成一个看起来像 KO 的细胞，而是在可解释的 pathway/program/protein/ATAC 状态空间中，利用真实 KO 数据、系统网络先验和多模态信息，预测一个基因或两个基因敲除后细胞状态会怎样改变。
+VKX is an interpretable virtual knockout framework for small-sample single-cell and multimodal perturbation data. It predicts how cell states may change after single-gene or double-gene knockout by combining interpretable state scores, system-level regulatory priors, and a hard-constrained residual/PLS baseline.
 
-## 一句话概括
+中文发布版主文档：[`docs/VKX_publication_package_zh.md`](docs/VKX_publication_package_zh.md)
 
-用户输入普通单细胞矩阵或多组学矩阵，软件内部自动转成可解释的状态表示，然后输出虚拟 KO 之后的 pathway/protein/ATAC 变化、单细胞状态移动图、真实 vs 虚拟 heatmap、ROC/AUC 曲线、KO 总结卡片、失败原因诊断和图文报告。
+## What VKX Does
 
-## 为什么这个方法适合小样本？
+VKX takes ordinary single-cell or multimodal matrices as input:
 
-VKX 采用 hard-constrained residual/PLS baseline：
+- RNA expression matrix
+- optional ADT / CITE-seq protein matrix
+- optional ATAC gene activity, chromVAR motif activity, or peak-level accessibility
+- optional perturbation labels for labelled benchmark
+- optional batch, donor, and cell type metadata
 
-- KO 平均方向由真实 perturbation 数据和 Reactome/MSigDB/TF-target/PPI/motif/peak-gene 等先验约束。
-- 多模态信息作为额外状态特征加入，例如 RNA pathway score、ADT protein、ATAC gene activity、chromVAR motif activity、peak-level accessibility。
-- 双基因 KO 优先使用 interaction residual；数据不足时回退到稳定的 additive/prior-constrained baseline。
-- 轻量生成模块只学习 hard constraint 附近的不确定性范围，不让 VAE/flow/diffusion 自由改变 KO 主方向。
+It outputs:
 
-这意味着它更保守、更容易解释，也更适合小样本；代价是复杂分布形状和强非线性效应不一定能完全模拟。
+- predicted virtual KO state changes
+- virtual KO cells
+- real vs virtual KO heatmaps
+- ROC/AUC curves
+- before/after UMAP or PCA views
+- single-KO vs double-KO response maps
+- ATAC peak locus tracks
+- prediction-only reports for ordinary 10X data without KO labels
 
-## 支持什么输入？
+## Core Idea
 
-### 1. 带 KO 标签的 perturbation / CRISPR / Perturb-seq 数据
-
-推荐 h5ad：
+VKX does not train a fully free generative model from scratch. Instead, it first learns a stable and interpretable KO direction, then generates virtual cells near that hard constraint:
 
 ```text
-adata.X                 cells x genes RNA matrix
-adata.var_names         gene symbols
-adata.obs["ko_target"]  control / STAT1 / STAT1+JAK2 等 KO 标签
-adata.obs["cell_type"]  可选
-adata.obs["batch"]      可选
-adata.obsm["protein"]   可选，ADT/CITE-seq protein
-adata.obsm["atac"]      可选，ATAC gene activity
-adata.obsm["chromvar"]  可选，TF/motif activity
-adata.obsm["peak"]      可选，raw peak count / peak accessibility
+virtual KO state = control state + predicted KO delta + bounded residual
 ```
 
-有真实 KO 标签时，可以做准确性评估，输出 AUC、R2/MAE、真实 vs 虚拟 heatmap 和 UMAP/PCA 状态移动图。
+This design is intended for small-sample settings where large perturbation pretraining is not available.
 
-### 2. 普通 10X 单细胞数据
+## Model Schematic
 
-没有 KO 标签也支持，但只能做 prediction-only reference application：
+![VKX model schematic](docs/assets/draft_figures/01_vkx_model_algorithm_schematic.png)
 
-- 可以预测“如果敲 STAT1 或 STAT1+JAK2，细胞状态可能往哪里移动”。
-- 不能在该数据内部报告真实准确率、AUC、R2 或 MAE。
-- 软件会输出 prior coverage、transfer confidence、uncertainty band、虚拟状态图和 KO 总结卡片。
+## Current Results
 
-### 3. 多模态数据
+| Dataset / task | Modality | KO type | AUC | Direction | MAE |
+|---|---|---:|---:|---:|---:|
+| Papalexi ECCITE-seq | RNA + ADT | single KO | 0.878 | 0.879 | 0.424 |
+| Norman Perturb-seq | RNA program | double KO | 1.000 | 0.960 | 0.127 |
+| HMPCITE-seq GSE243244 | RNA + ADT + GDO-derived | double KO | 0.978 | 0.976 | 0.114 |
+| scPerturb ATAC K562 | ATAC peak + prior | peak-level | 0.674 | 0.771 | 0.061 |
 
-支持 RNA-only、RNA+ADT、RNA+ATAC、RNA+ADT+ATAC 输入。当前公开 labelled benchmark 中已经比较明确的是：
+The Norman AUC is based on only five program-level features and should be interpreted together with heatmaps, MAE, and response maps.
 
-- RNA+ADT+perturbation：例如 ECCITE/Perturb-CITE 类数据。
-- RNA+ATAC+perturbation：例如 multiome perturbation 类数据。
-- RNA+ADT+ATAC 但无 genetic perturbation 标签：例如 DOGMA/TEA-seq，更适合 prediction-only/reference application。
+## Key Figures
 
-真正公开、同一批细胞同时具备 RNA+ADT+ATAC+genetic perturbation 标签的数据集，目前在本项目 registry 中仍标记为 `not_confirmed_public`，不能假装已经完成 full trimodal labelled benchmark。
+![Publication main figure](docs/assets/draft_figures/00_publication_main_figure.png)
 
-## 最常用命令
+![ROC AUC curves](docs/assets/draft_figures/02_auc_roc_curves.png)
 
-### 导入 10X 或 Seurat/AnnData 数据
+![Real vs virtual heatmap](docs/assets/draft_figures/03_real_vs_virtual_method_heatmap.png)
 
-```bash
-python -m vkx.cli import-data \
-  --input path/to/filtered_feature_bc_matrix \
-  --format 10x_mtx \
-  --metadata-csv metadata.csv \
-  --cell-id-col cell_id \
-  --out-dir results/import_10x
-```
+![Before after UMAP](docs/assets/draft_figures/07_before_after_umap_panel.png)
 
-### 有 KO 标签时直接评估虚拟敲除
+## Quick Start
+
+### Labelled perturbation data
 
 ```bash
 python -m vkx.cli run \
-  --input-h5ad results/import_10x/imported_data.h5ad \
+  --input-h5ad labelled_perturbation.h5ad \
   --ko-col ko_target \
   --target-kos STAT1,STAT1+JAK2 \
   --prior-dir data/priors \
   --extra-obsm protein:protein,chromvar:tf,peak:peak \
-  --extra-feature-selection atac_peak \
-  --extra-feature-metadata-csv peak_annotation.csv \
-  --shape-calibrate quantile \
   --out-dir results/labelled_virtual_ko
 ```
 
-### 训练 reference model
+### Train a reference model
 
 ```bash
 python -m vkx.cli train-reference \
@@ -92,13 +83,10 @@ python -m vkx.cli train-reference \
   --batch-col donor \
   --interaction-mode auto \
   --prior-dir data/priors \
-  --extra-obsm protein:protein,chromvar:tf,peak:peak \
-  --extra-feature-selection atac_peak \
-  --extra-feature-metadata-csv peak_annotation.csv \
   --output-model results/reference_models/vkx_reference.pkl
 ```
 
-### 应用到普通 10X 或无 KO 标签数据
+### Apply to ordinary 10X or unlabelled data
 
 ```bash
 python -m vkx.cli apply-reference \
@@ -107,132 +95,23 @@ python -m vkx.cli apply-reference \
   --target-kos STAT1,STAT1+JAK2 \
   --cell-type-col cell_type \
   --batch-col donor \
-  --uncertainty-method hard-residual \
   --out-dir results/prediction_only_STAT1
 ```
 
-### 结果诊断：告诉用户哪里可信、哪里要谨慎
+For data without KO labels, VKX only produces a prediction-only report. It must not report real AUC, MAE, R2, or true accuracy inside that dataset.
 
-```bash
-python -m vkx.cli diagnose-results \
-  --delta-csv results/labelled_virtual_ko/delta_table.csv \
-  --manifest-csv results/labelled_virtual_ko/derived_state_manifest.csv \
-  --out-dir results/labelled_virtual_ko/diagnosis
-```
+## Publication Package
 
-`run`、`fit` 和 `apply-reference` 会自动尝试生成诊断结果；这个命令适合对已有结果重新诊断。
+The current release-ready write-up is:
 
-### 一键整理成用户可读报告
+- [`docs/VKX_publication_package_zh.md`](docs/VKX_publication_package_zh.md): publication-style Chinese method and results package
+- [`docs/vkx_method_results_draft_zh.md`](docs/vkx_method_results_draft_zh.md): longer development draft with historical results
+- [`docs/vkx_method_results_draft_zh.html`](docs/vkx_method_results_draft_zh.html): local HTML reading version
 
-```bash
-python -m vkx.cli summarize-result \
-  --result-dir results/labelled_virtual_ko
-```
+## Current Boundaries
 
-这个命令会把一个结果目录自动整理成：
+- VKX supports single KO, double KO, reference model application, batch/cell-type metadata, and multimodal extra-obsm inputs.
+- The current neural generator is hard-constrained residual uncertainty modelling, not a fully free diffusion/VAE/flow model.
+- A true public RNA+ADT+ATAC+genetic perturbation labelled benchmark still needs confirmation.
+- scGen, CPA, GEARS, and CellOT need a fully reproducible same-split benchmark before making claims of superiority.
 
-- `readable_result_report/user_readable_result_report.md`
-- `readable_result_report/ko_cards/`
-- `readable_result_report/diagnosis/`
-- `readable_result_report/figure_package/`
-
-适合把结果发给别人看，也适合写论文或组会汇报前快速检查结果是否可信。
-
-## 主要输出怎么看？
-
-每个结果目录通常包含：
-
-- `01_summary_dashboard.png`: 总体表现，包括方向一致性、误差和改进比例。
-- `02_true_vs_virtual_heatmap.png`: 最重要的图，直接比较真实 KO delta、虚拟 KO delta 和误差。
-- `03_cell_state_umap.png`: 单细胞状态空间中 control、virtual KO、true KO 的位置。
-- `04_auc_strong_response_roc.png`: AUC 曲线，不是柱状图，用来判断能否识别强响应特征。
-- `ko_cards/ko_card_<KO>.png`: 每个 KO 的用户可读总结卡片。
-- `diagnosis/01_failure_diagnosis_overview.png`: 哪些 KO/特征风险高。
-- `diagnosis/02_feature_error_heatmap.png`: feature-level 误差热图。
-- `figure_package/figure_package_report.md`: 自动整理好的图文报告。
-- `readable_result_report/user_readable_result_report.md`: 一键汇总后的用户可读总报告。
-
-## 怎么做横向比较？
-
-```bash
-python -m vkx.cli method-comparison \
-  --metric-csv results/vkx_metrics.csv,results/ridge_metrics.csv,results/gears_metrics.csv \
-  --out-dir results/method_comparison
-```
-
-VKX 的定位是小样本、多模态、先验约束、可解释 baseline。它应该和 ridge/PLS、scGen、CPA、GEARS、CellOT、diffusion/flow 类方法比较，但结论需要限定在具体 benchmark 和数据规模内。
-
-更正式的同数据 benchmark 可以使用：
-
-```bash
-python -m vkx.cli formal-benchmark \
-  --state-csv results/labelled_virtual_ko/derived_state_scores.csv \
-  --ko-col ko_target \
-  --target-kos STAT1,JAK2,STAT1+JAK2 \
-  --prior-dir data/priors \
-  --methods vkx,boosted,ensemble,pls,ridge,additive,scgen,cpa,gears,cellot \
-  --out-dir results/formal_method_benchmark
-```
-
-固定输出：
-
-- `formal_benchmark_metrics.csv`
-- `method_metric_comparison.csv`
-- `method_availability.csv`
-- `01_formal_benchmark_metric_panel.png`
-- `02_formal_benchmark_delta_heatmap.png`
-- `03_method_availability.png`
-- `figure_package/figure_package_report.md`
-
-其中 scGen、CPA、GEARS 和 CellOT 默认是外部方法槽位。如果已经用这些方法单独跑出了预测结果，可以通过：
-
-```bash
---external-predictions-csv external_method_predictions.csv
-```
-
-传入，格式至少包含：
-
-```text
-method,ko_target,pred_delta_<feature1>,pred_delta_<feature2>,...
-```
-
-如果没有外部预测文件，报告会把这些方法标为 `not_run`，不会假装已经比较。
-
-## Hard-constrained 轻量生成器
-
-在稳定 baseline 之上，可以训练一个只学习局部不确定性的 residual generator：
-
-```bash
-python -m vkx.cli train-hard-generator \
-  --state-csvs results/dataset1/derived_state_scores.csv,results/dataset2/derived_state_scores.csv \
-  --ko-col ko_target \
-  --target-kos STAT1,STAT1+JAK2 \
-  --prior-dir data/priors \
-  --anchor-method boosted \
-  --samples-per-ko 300 \
-  --max-residual-fraction 0.35 \
-  --out-dir results/hard_constrained_generator
-```
-
-生成细胞遵循：
-
-```text
-virtual cell = control cell + VKX baseline KO delta + bounded learned residual
-```
-
-也就是说，generator 不能自由改变 KO 主方向，只能学习方向附近的细胞间波动。`--anchor-method` 可以选择 `vkx`、`pls`、`ridge`、`ensemble`、`calibrated` 或 `boosted`；如果正式 benchmark 显示 Ridge/PLS 更稳定，推荐先用 `ensemble` 作为 hard constraint 的锚点。如果出现“方向对但强响应幅度偏小”，可使用 `boosted`。它会在 constrained ensemble 基础上加入可解释的 adaptive response-strength prior：根据 KO gene 和 feature family 自动增强 IFN/JAK/STAT、MAPK/TGFB、MYC/E2F/cell-cycle 或 checkpoint protein 等响应家族，并在 prediction table 中记录 `boosted_feature_count`、`max_boost_factor` 和 `boosted_families`。PyTorch 可用时会训练轻量 residual VAE；如果不可用，会退回 PCA residual sampler，并在报告里明确说明。
-
-## 当前还缺什么？
-
-1. 需要更正式的横向 benchmark，把 VKX 与 ridge/PLS、scGen、CPA、GEARS、CellOT 等方法在同一批数据上比较。
-2. 真正公开 RNA+ADT+ATAC+genetic perturbation labelled benchmark 仍未确认；找到后才能升级为 full trimodal labelled benchmark。
-3. 当前已加入 hard-constrained residual generator；完整 scGen/CPA/GEARS/CellOT 比较需要外部方法预测文件或对应环境。
-4. MAPK/TGFB 等强非线性 program 仍是困难案例，需要更强 pathway/TF/PPI/motif 先验和非线性修正。
-5. 可视化已经能自动生成，但论文级多 panel figure 还需要针对最终 benchmark 再统一排版。
-
-## 结果解释原则
-
-- 有 KO 标签：可以报告真实准确性，例如 AUC、MAE、R2、方向一致性、真实 vs 虚拟 heatmap。
-- 没有 KO 标签：只能报告预测状态变化、先验覆盖、迁移置信度和不确定性范围，不能报告真实准确性。
-- 多模态输入通常会让预测更可靠，但前提是模态质量好、与 KO 机制相关，并且有合理的 feature selection 和先验约束。
-- AUC 如果接近 1，需要检查特征数、阈值和正负样本数量；特征很少时 AUC 容易显得过于理想，必须谨慎解释。
