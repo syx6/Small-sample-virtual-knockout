@@ -5,15 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VKX ?????????????????</title>
 <style>
-body { font-family: "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; line-height: 1.68; color: #1f2933; max-width: 1100px; margin: 40px auto; padding: 0 28px; background: #fbfcfd; }
-h1, h2, h3 { color: #102a43; line-height: 1.28; }
+body { font-family: "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; line-height: 1.68; color: #1f2933; max-width: 1160px; margin: 40px auto; padding: 0 28px; background: #fbfcfd; }
+h1, h2, h3, h4 { color: #102a43; line-height: 1.28; }
 h1 { font-size: 34px; border-bottom: 3px solid #d9e2ec; padding-bottom: 14px; }
-h2 { margin-top: 40px; font-size: 25px; }
-h3 { margin-top: 28px; font-size: 20px; }
+h2 { margin-top: 44px; font-size: 25px; border-top: 1px solid #d9e2ec; padding-top: 24px; }
+h3 { margin-top: 30px; font-size: 20px; }
+h4 { margin-top: 24px; font-size: 17px; }
 p, li { font-size: 16px; }
-img { max-width: 100%; height: auto; display: block; margin: 18px auto 28px; border: 1px solid #d9e2ec; border-radius: 8px; background: white; }
+img { max-width: 100%; height: auto; display: block; margin: 18px auto 30px; border: 1px solid #d9e2ec; border-radius: 8px; background: white; }
 table { border-collapse: collapse; width: 100%; margin: 16px 0 26px; background: white; font-size: 15px; }
-th, td { border: 1px solid #cbd5e1; padding: 9px 10px; text-align: left; }
+th, td { border: 1px solid #cbd5e1; padding: 9px 10px; text-align: left; vertical-align: top; }
 th { background: #eef5fb; color: #102a43; }
 pre { background: #0f172a; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 14px; }
 code { font-family: Consolas, "Courier New", monospace; }
@@ -169,6 +170,134 @@ quantiles_virtual ≈ quantiles_true_KO
 <h3 id="58-radar-leaderboard">5.8 方法 radar / leaderboard</h3>
 <p><img alt="Radar leaderboard" src="assets/draft_figures/10_method_radar_leaderboard.png" /></p>
 <p>图 8 用 radar/leaderboard 概括多个指标。它适合放在论文主图或补充图中，帮助读者同时比较 AUC、方向一致性、误差、分布改善和可解释性。</p>
+<h3 id="59">5.9 第一版初稿遗漏的历史结果</h3>
+<p>上一版初稿主要围绕最新 <code>full_benchmark_suite_v5</code> 的论文级主图展开，因此压缩掉了前面几轮探索中的一些重要结果。为了避免读者误以为这些实验没有做过，这里把它们补成完整结果索引。</p>
+<table>
+<thead>
+<tr>
+<th>结果模块</th>
+<th>数据/任务</th>
+<th>当时解决的问题</th>
+<th>当前结论</th>
+<th>建议放置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Papalexi/STAT1 单敲示例</td>
+<td>RNA + ADT, single KO</td>
+<td>用户到底敲了哪个基因、真实和虚拟有什么区别</td>
+<td>STAT1 是最清楚的单敲演示例子，适合解释输入输出</td>
+<td>主文或方法示例</td>
+</tr>
+<tr>
+<td>Papalexi 单细胞 UMAP</td>
+<td>RNA + ADT, single KO</td>
+<td>是否能看到 KO 前后细胞状态移动</td>
+<td>多数 KO 可看到 control 向 true KO 方向移动，但不同 KO 稳定性不同</td>
+<td>主文图或补充图</td>
+</tr>
+<tr>
+<td>Norman 双敲交互</td>
+<td>RNA program, double KO</td>
+<td>双敲是否只是单敲相加</td>
+<td>interaction residual 能改善部分双敲，MAPK/TGFB 仍困难</td>
+<td>主文结果/局限</td>
+</tr>
+<tr>
+<td>多数据集 heatmap</td>
+<td>Papalexi/Norman/Datlinger/Dixit</td>
+<td>RNA-only 是否完全不能做</td>
+<td>RNA-only 很多 KO 方向是对的，但幅度和分布形状较难</td>
+<td>补充图</td>
+</tr>
+<tr>
+<td>pathway 幅度校准</td>
+<td>RNA-only pathway/program</td>
+<td>方向对但幅度不对怎么办</td>
+<td>Datlinger 和 Dixit 经校准后更接近真实 KO；Papalexi 多模态不一定需要强制校准</td>
+<td>方法补充</td>
+</tr>
+<tr>
+<td>deep generator 对比</td>
+<td>VAE/flow/diffusion</td>
+<td>复杂生成模型是否自然更好</td>
+<td>小样本下自由生成模型反而更差，因此确定 hard constraint 策略</td>
+<td>方法动机</td>
+</tr>
+<tr>
+<td>hard uncertainty band</td>
+<td>residual baseline + uncertainty</td>
+<td>是否可以输出不确定性范围</td>
+<td>可以作为置信区间，但不应改变 KO 主方向</td>
+<td>方法补充</td>
+</tr>
+<tr>
+<td>reference model</td>
+<td>普通 10X / 无 KO 标签应用</td>
+<td>没有 KO 标签的数据能不能用</td>
+<td>可以做 prediction-only / reference application，不能报告真实准确率</td>
+<td>软件接口</td>
+</tr>
+<tr>
+<td>ATAC/chromVAR/peak-level</td>
+<td>scPerturb ATAC K562</td>
+<td>ATAC 加入后如何解释 peak 层面变化</td>
+<td>motif/TF/peak-gene prior 和 quantile calibration 有帮助，但 peak-level 仍难</td>
+<td>主文或补充</td>
+</tr>
+</tbody>
+</table>
+<h4 id="591-stat1">5.9.1 单敲 STAT1：最适合向普通读者解释的例子</h4>
+<p><img alt="STAT1 single KO summary" src="report_assets/figure_02_STAT1.png" /></p>
+<p>图 9 是早期整理出的 STAT1 单基因敲除示例。这个图的价值不只是指标，而是能让读者看到完整故事：输入的是 Papalexi ECCITE-seq 的 RNA+ADT 数据，目标是 STAT1 KO，输出是 pathway/protein 层面的真实 KO 变化、虚拟 KO 变化和误差。</p>
+<p><img alt="STAT1 true vs virtual heatmap" src="report_assets/figure_03_STAT1_true_vs_virtual_heatmap.png" /></p>
+<p>图 10 是 STAT1 的 real vs virtual heatmap。它比单个 AUC 或 MAE 更容易解释：如果真实 KO 和虚拟 KO 的颜色方向一致，说明模型预测到了敲除后的主要状态移动；如果误差列颜色较浅，说明幅度也比较接近。</p>
+<p><img alt="STAT1 UMAP" src="report_assets/figure_04_STAT1_UMAP.png" /></p>
+<p>图 11 展示 STAT1 KO 的 before/after UMAP。它回答的是“虚拟敲除后的细胞是不是从 control 状态往真实 KO 状态移动”。这个图适合放在方法示例中，帮助非生信读者理解 cell-level virtual KO 的含义。</p>
+<p><img alt="STAT1 ROC" src="report_assets/figure_05_STAT1_ROC.png" /></p>
+<p>图 12 是 STAT1 的 ROC/AUC 曲线。它比柱状 AUC 更规范，说明 VKX 是否能把强响应 pathway/protein 排在前面。</p>
+<h4 id="592-norman-program">5.9.2 Norman 双敲：交互效应与失败 program</h4>
+<p><img alt="Norman interaction residual" src="report_assets/figure_10_Norman_interaction_residual.png" /></p>
+<p>图 13 是 Norman 双敲 interaction residual 的核心结果。它说明双敲不能简单理解为“单敲 A + 单敲 B”，有些组合存在非加性效应。VKX 当前用 residual interaction 项修正双敲预测：</p>
+<pre><code class="language-text">Delta_hat_(A+B) = Delta_hat_A + Delta_hat_B + r_hat_(A,B)
+</code></pre>
+<p><img alt="Norman double KO summary" src="report_assets/figure_11_Norman.png" /></p>
+<p>图 14 是 Norman 双敲的整体展示。CEBPB+CEBPA 这类组合表现较好，而 MAPK/TGFB 相关 program 是当前短板。这个结果应该在初稿里诚实写出：VKX 已支持双敲，但复杂非线性通路仍需要加强。</p>
+<p><img alt="Norman UMAP" src="report_assets/figure_12_Norman_UMAP.png" /></p>
+<p>图 15 是 Norman 双敲 cell-level UMAP。它展示虚拟 KO 细胞在状态空间中的移动是否接近真实双敲细胞。该图适合做补充结果，说明模型不只是预测平均 delta，也输出 cell-level 状态。</p>
+<h4 id="593-hmpcite">5.9.3 HMPCITE 多模态双敲：当前最强的多模态证据</h4>
+<p><img alt="HMPCITE multimodal double KO" src="report_assets/figure_13_HMPCITE.png" /></p>
+<p>图 16 是 HMPCITE-seq 多模态双敲结果。它是当前最能支持“多模态让虚拟敲除更可靠”的证据之一，因为输入包含 RNA、ADT 以及 guide-derived perturbation labels。</p>
+<p><img alt="HMPCITE heatmap" src="report_assets/figure_14_HMPCITE_heatmap.png" /></p>
+<p>图 17 展示 HMPCITE 的真实 KO 与虚拟 KO heatmap。当前结果中，HMPCITE 的 AUC、方向一致性和分布改善都比较高，说明 RNA pathway 与 ADT 状态共同约束时，双敲预测更稳定。</p>
+<p><img alt="HMPCITE UMAP" src="report_assets/figure_15_HMPCITE_UMAP.png" /></p>
+<p>图 18 展示 HMPCITE 的 UMAP 状态移动。它应该和 heatmap 一起解释：heatmap 说明 feature-level 是否预测对，UMAP 说明 cell-level 状态是否移动到合理区域。</p>
+<p><img alt="HMPCITE ROC" src="report_assets/figure_16_HMPCITE_ROC.png" /></p>
+<p>图 19 是 HMPCITE 的 ROC/AUC 曲线。它适合作为多模态 benchmark 的主结果之一。</p>
+<h4 id="594-atac-peak-level-atac-peak">5.9.4 ATAC peak-level：不能只说有 ATAC，要显示 peak 层面证据</h4>
+<p><img alt="ATAC peak-level visualization" src="report_assets/figure_18_ATAC_peak-level_visualization.png" /></p>
+<p>图 20 是 ATAC peak-level 可视化。它补上了一个重要点：如果方法声称支持 ATAC，就不能只展示 gene activity 或 motif proxy，还应该展示 peak locus、真实 peak delta、虚拟 peak delta 和单细胞 peak 分布。当前 ATAC 模块已经加入 target locus、motif/TF prior、peak-gene linkage、KO effect、可及性和 quantile/zero-inflated calibration，但 peak-level 分布仍比 RNA/protein 更难。</p>
+<h4 id="595-reference-model-10x-ko">5.9.5 Reference model：普通 10X/无 KO 标签数据如何使用</h4>
+<p><img alt="Reference predicted KO delta" src="report_assets/figure_19_Reference_predicted_KO_delta.png" /></p>
+<p>图 21 展示 reference model 在无标签数据上的 predicted KO delta。这里必须明确：普通 10X 数据如果没有 KO 标签，可以输入 VKX 做状态转换和虚拟 KO 应用，但不能在该数据内部计算真实 AUC、MAE 或 R²。</p>
+<p><img alt="Reference input vs virtual PCA" src="report_assets/figure_20_Reference_input_vs_virtual_PCA.png" /></p>
+<p>图 22 展示 reference application 后的输入细胞与虚拟 KO 细胞状态移动。它的作用是“预测展示”，不是准确性验证。</p>
+<p><img alt="Reference transfer confidence" src="report_assets/figure_21_Reference_transfer_confidence.png" /></p>
+<p>图 23 展示 reference transfer confidence。对无标签数据，置信度比准确率更重要，因为没有真实 KO ground truth。</p>
+<p><img alt="Reference prior coverage" src="report_assets/figure_22_Reference_prior_coverage.png" /></p>
+<p>图 24 展示 prior coverage。对于未见基因或普通 10X 应用，先验覆盖越弱，结果越应该标记为低置信度。</p>
+<h4 id="596-cell-level-generator-diffusionvae">5.9.6 早期 cell-level generator 对比：为什么不用自由 diffusion/VAE</h4>
+<p>早期我们比较过 residual baseline、conditional VAE、flow matching 和 diffusion。结论很关键：在当前小样本条件下，直接训练自由生成模型没有超过 residual baseline，反而更容易偏离 KO 主方向。因此现在的策略是：</p>
+<pre><code class="language-text">residual / PLS baseline = hard constraint
+VAE / flow / diffusion = 只学习 hard constraint 附近的不确定性
+</code></pre>
+<p>这个结果应该写进方法动机：我们不是因为不知道深度生成模型，而是因为实验证明当前数据规模下更稳的做法是先固定 KO 方向，再建模局部不确定性。</p>
+<h4 id="597-pathway-heatmap">5.9.7 pathway 幅度校准和多数据集 heatmap</h4>
+<p>早期多数据集实验显示，RNA-only 数据不是不能做虚拟敲除。Datlinger 和 Dixit 中很多 KO 的方向预测较好，但幅度和单细胞分布形状偏差较大。因此我们加入了 pathway/program score 的幅度校准：</p>
+<pre><code class="language-text">S_virtual = S_control + alpha * Delta_hat
+</code></pre>
+<p>其中 alpha 被限制在合理范围内，只校准变化大小，不允许反转 KO 方向。这个结果适合放在补充方法中，用来解释为什么 RNA-only 默认也转成 pathway/program score，并推荐使用 <code>--calibrate auto</code>。</p>
 <h2 id="6">6. 与已有方法比较的当前状态</h2>
 <p>当前 benchmark 框架已经为 ridge、PLS、additive、scGen、CPA、GEARS、CellOT 预留统一接口。ridge、PLS 和 additive 可以作为轻量 baseline 直接运行。scGen、CPA、GEARS 和 CellOT 当前在本机环境中的状态不是“结果差”，而是“未完成可复现实跑”：</p>
 <table>

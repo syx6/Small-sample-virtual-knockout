@@ -165,6 +165,121 @@ quantiles_virtual ≈ quantiles_true_KO
 
 图 8 用 radar/leaderboard 概括多个指标。它适合放在论文主图或补充图中，帮助读者同时比较 AUC、方向一致性、误差、分布改善和可解释性。
 
+### 5.9 第一版初稿遗漏的历史结果
+
+上一版初稿主要围绕最新 `full_benchmark_suite_v5` 的论文级主图展开，因此压缩掉了前面几轮探索中的一些重要结果。为了避免读者误以为这些实验没有做过，这里把它们补成完整结果索引。
+
+| 结果模块 | 数据/任务 | 当时解决的问题 | 当前结论 | 建议放置 |
+|---|---|---|---|---|
+| Papalexi/STAT1 单敲示例 | RNA + ADT, single KO | 用户到底敲了哪个基因、真实和虚拟有什么区别 | STAT1 是最清楚的单敲演示例子，适合解释输入输出 | 主文或方法示例 |
+| Papalexi 单细胞 UMAP | RNA + ADT, single KO | 是否能看到 KO 前后细胞状态移动 | 多数 KO 可看到 control 向 true KO 方向移动，但不同 KO 稳定性不同 | 主文图或补充图 |
+| Norman 双敲交互 | RNA program, double KO | 双敲是否只是单敲相加 | interaction residual 能改善部分双敲，MAPK/TGFB 仍困难 | 主文结果/局限 |
+| 多数据集 heatmap | Papalexi/Norman/Datlinger/Dixit | RNA-only 是否完全不能做 | RNA-only 很多 KO 方向是对的，但幅度和分布形状较难 | 补充图 |
+| pathway 幅度校准 | RNA-only pathway/program | 方向对但幅度不对怎么办 | Datlinger 和 Dixit 经校准后更接近真实 KO；Papalexi 多模态不一定需要强制校准 | 方法补充 |
+| deep generator 对比 | VAE/flow/diffusion | 复杂生成模型是否自然更好 | 小样本下自由生成模型反而更差，因此确定 hard constraint 策略 | 方法动机 |
+| hard uncertainty band | residual baseline + uncertainty | 是否可以输出不确定性范围 | 可以作为置信区间，但不应改变 KO 主方向 | 方法补充 |
+| reference model | 普通 10X / 无 KO 标签应用 | 没有 KO 标签的数据能不能用 | 可以做 prediction-only / reference application，不能报告真实准确率 | 软件接口 |
+| ATAC/chromVAR/peak-level | scPerturb ATAC K562 | ATAC 加入后如何解释 peak 层面变化 | motif/TF/peak-gene prior 和 quantile calibration 有帮助，但 peak-level 仍难 | 主文或补充 |
+
+#### 5.9.1 单敲 STAT1：最适合向普通读者解释的例子
+
+![STAT1 single KO summary](report_assets/figure_02_STAT1.png)
+
+图 9 是早期整理出的 STAT1 单基因敲除示例。这个图的价值不只是指标，而是能让读者看到完整故事：输入的是 Papalexi ECCITE-seq 的 RNA+ADT 数据，目标是 STAT1 KO，输出是 pathway/protein 层面的真实 KO 变化、虚拟 KO 变化和误差。
+
+![STAT1 true vs virtual heatmap](report_assets/figure_03_STAT1_true_vs_virtual_heatmap.png)
+
+图 10 是 STAT1 的 real vs virtual heatmap。它比单个 AUC 或 MAE 更容易解释：如果真实 KO 和虚拟 KO 的颜色方向一致，说明模型预测到了敲除后的主要状态移动；如果误差列颜色较浅，说明幅度也比较接近。
+
+![STAT1 UMAP](report_assets/figure_04_STAT1_UMAP.png)
+
+图 11 展示 STAT1 KO 的 before/after UMAP。它回答的是“虚拟敲除后的细胞是不是从 control 状态往真实 KO 状态移动”。这个图适合放在方法示例中，帮助非生信读者理解 cell-level virtual KO 的含义。
+
+![STAT1 ROC](report_assets/figure_05_STAT1_ROC.png)
+
+图 12 是 STAT1 的 ROC/AUC 曲线。它比柱状 AUC 更规范，说明 VKX 是否能把强响应 pathway/protein 排在前面。
+
+#### 5.9.2 Norman 双敲：交互效应与失败 program
+
+![Norman interaction residual](report_assets/figure_10_Norman_interaction_residual.png)
+
+图 13 是 Norman 双敲 interaction residual 的核心结果。它说明双敲不能简单理解为“单敲 A + 单敲 B”，有些组合存在非加性效应。VKX 当前用 residual interaction 项修正双敲预测：
+
+```text
+Delta_hat_(A+B) = Delta_hat_A + Delta_hat_B + r_hat_(A,B)
+```
+
+![Norman double KO summary](report_assets/figure_11_Norman.png)
+
+图 14 是 Norman 双敲的整体展示。CEBPB+CEBPA 这类组合表现较好，而 MAPK/TGFB 相关 program 是当前短板。这个结果应该在初稿里诚实写出：VKX 已支持双敲，但复杂非线性通路仍需要加强。
+
+![Norman UMAP](report_assets/figure_12_Norman_UMAP.png)
+
+图 15 是 Norman 双敲 cell-level UMAP。它展示虚拟 KO 细胞在状态空间中的移动是否接近真实双敲细胞。该图适合做补充结果，说明模型不只是预测平均 delta，也输出 cell-level 状态。
+
+#### 5.9.3 HMPCITE 多模态双敲：当前最强的多模态证据
+
+![HMPCITE multimodal double KO](report_assets/figure_13_HMPCITE.png)
+
+图 16 是 HMPCITE-seq 多模态双敲结果。它是当前最能支持“多模态让虚拟敲除更可靠”的证据之一，因为输入包含 RNA、ADT 以及 guide-derived perturbation labels。
+
+![HMPCITE heatmap](report_assets/figure_14_HMPCITE_heatmap.png)
+
+图 17 展示 HMPCITE 的真实 KO 与虚拟 KO heatmap。当前结果中，HMPCITE 的 AUC、方向一致性和分布改善都比较高，说明 RNA pathway 与 ADT 状态共同约束时，双敲预测更稳定。
+
+![HMPCITE UMAP](report_assets/figure_15_HMPCITE_UMAP.png)
+
+图 18 展示 HMPCITE 的 UMAP 状态移动。它应该和 heatmap 一起解释：heatmap 说明 feature-level 是否预测对，UMAP 说明 cell-level 状态是否移动到合理区域。
+
+![HMPCITE ROC](report_assets/figure_16_HMPCITE_ROC.png)
+
+图 19 是 HMPCITE 的 ROC/AUC 曲线。它适合作为多模态 benchmark 的主结果之一。
+
+#### 5.9.4 ATAC peak-level：不能只说有 ATAC，要显示 peak 层面证据
+
+![ATAC peak-level visualization](report_assets/figure_18_ATAC_peak-level_visualization.png)
+
+图 20 是 ATAC peak-level 可视化。它补上了一个重要点：如果方法声称支持 ATAC，就不能只展示 gene activity 或 motif proxy，还应该展示 peak locus、真实 peak delta、虚拟 peak delta 和单细胞 peak 分布。当前 ATAC 模块已经加入 target locus、motif/TF prior、peak-gene linkage、KO effect、可及性和 quantile/zero-inflated calibration，但 peak-level 分布仍比 RNA/protein 更难。
+
+#### 5.9.5 Reference model：普通 10X/无 KO 标签数据如何使用
+
+![Reference predicted KO delta](report_assets/figure_19_Reference_predicted_KO_delta.png)
+
+图 21 展示 reference model 在无标签数据上的 predicted KO delta。这里必须明确：普通 10X 数据如果没有 KO 标签，可以输入 VKX 做状态转换和虚拟 KO 应用，但不能在该数据内部计算真实 AUC、MAE 或 R²。
+
+![Reference input vs virtual PCA](report_assets/figure_20_Reference_input_vs_virtual_PCA.png)
+
+图 22 展示 reference application 后的输入细胞与虚拟 KO 细胞状态移动。它的作用是“预测展示”，不是准确性验证。
+
+![Reference transfer confidence](report_assets/figure_21_Reference_transfer_confidence.png)
+
+图 23 展示 reference transfer confidence。对无标签数据，置信度比准确率更重要，因为没有真实 KO ground truth。
+
+![Reference prior coverage](report_assets/figure_22_Reference_prior_coverage.png)
+
+图 24 展示 prior coverage。对于未见基因或普通 10X 应用，先验覆盖越弱，结果越应该标记为低置信度。
+
+#### 5.9.6 早期 cell-level generator 对比：为什么不用自由 diffusion/VAE
+
+早期我们比较过 residual baseline、conditional VAE、flow matching 和 diffusion。结论很关键：在当前小样本条件下，直接训练自由生成模型没有超过 residual baseline，反而更容易偏离 KO 主方向。因此现在的策略是：
+
+```text
+residual / PLS baseline = hard constraint
+VAE / flow / diffusion = 只学习 hard constraint 附近的不确定性
+```
+
+这个结果应该写进方法动机：我们不是因为不知道深度生成模型，而是因为实验证明当前数据规模下更稳的做法是先固定 KO 方向，再建模局部不确定性。
+
+#### 5.9.7 pathway 幅度校准和多数据集 heatmap
+
+早期多数据集实验显示，RNA-only 数据不是不能做虚拟敲除。Datlinger 和 Dixit 中很多 KO 的方向预测较好，但幅度和单细胞分布形状偏差较大。因此我们加入了 pathway/program score 的幅度校准：
+
+```text
+S_virtual = S_control + alpha * Delta_hat
+```
+
+其中 alpha 被限制在合理范围内，只校准变化大小，不允许反转 KO 方向。这个结果适合放在补充方法中，用来解释为什么 RNA-only 默认也转成 pathway/program score，并推荐使用 `--calibrate auto`。
+
 ## 6. 与已有方法比较的当前状态
 
 当前 benchmark 框架已经为 ridge、PLS、additive、scGen、CPA、GEARS、CellOT 预留统一接口。ridge、PLS 和 additive 可以作为轻量 baseline 直接运行。scGen、CPA、GEARS 和 CellOT 当前在本机环境中的状态不是“结果差”，而是“未完成可复现实跑”：
@@ -212,4 +327,3 @@ quantiles_virtual ≈ quantiles_true_KO
 4. 对 MAPK/TGFB 等失败 program 做专项先验增强和非线性修正。
 5. 继续增强 ATAC peak-gene linkage、motif-to-peak annotation 和 raw peak count 支持。
 6. 把 batch covariate、cell type 分层和批量 KO 输出整合到 reference model 主流程。
-
